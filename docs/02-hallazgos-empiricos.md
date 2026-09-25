@@ -183,3 +183,88 @@ Notas de método: `prompt` bloquea hasta el fin del turno (no sirve para busy);
 hay que usar `promptAsync` (`204` inmediato). `session.status` devuelve un mapa
 `sessionID → {type:"busy"}`; en idle la clave de la sesión está ausente (`{}`).
 Timeouts usados: setup-turn 240 s, waitForIdle 240 s, cleanup-idle 30 s.
+
+## Distill end-to-end ✅ (smoke-distill-e2e.ts, 2026-09-25)
+
+Corrida `SMOKE_MODEL=gpt-oss-20b SMOKE_DISTILL_MODEL=muse-spark-1.3-contributor PORT=4716 LOG=/tmp/opencode/distill-smoke-17c.log scripts/run-smoke.sh scripts/smoke-distill-e2e.ts`
+(exit 0; el default `deepseek-v4-flash` no responde en este entorno; `gpt-oss-20b`
+no parsea el formato del destilador —ver nota—, así que destila `muse-spark`).
+El modelo es configurable: `SMOKE_MODEL` (turnos + comparación) y
+`SMOKE_DISTILL_MODEL` (scratch del destilador), ambos default `muse-spark-1.3-contributor`.
+Evidencia cruda: `.omo/evidence/task-17-distill-implementacion-completa.log`.
+One-time (Metis F10), no gate de regresión. Importa código real de `src/`
+(`selectStretch`/`snapshotForTrace`/`buildRewritePlan`/`simulatePlan`/`partHash`/`selectedChars`,
+`buildBudget`/`buildTranscript`/`buildDistillPrompt`/`parseDistillOutput`/`userRequestFor`/`estTokens`,
+`appendPlanned`/`pristineReconstruct`/`buildRestoreOps`) — jamás replica.
+
+Diseño: dos twins en scratch dirs separados con 3 turnos idénticos (cada uno con
+tool call real `read` sobre un case-file distinto: FLAMMABLE/MAGNETIC/VOLCANIC).
+Twin A = control (sin destilar) + turno de comparación (`tokens.input` = 35686).
+Twin B = `selectStretch(current-turn)` → 2 mensajes del último turno →
+snapshot (3 originales + `partHash` por parte) → scratch prompt real
+(parse ok al intento 1) → plan (5 ops: distillate + stub + tool-update, 2 deletes;
+`before=3429` chars → `after=406`, break-even 1) → `simulatePlan` ok (I1–I8) →
+EXECUTE manual (`part.update` → `part.delete`) → VERIFY por read-back →
+intento de turno de comparación → RESTORE por cadena real del journal.
+
+| Check | Resultado |
+|---|---|
+| I1 (cada mensaje retiene ≥1 text no vacío) | OK × 2 mensajes |
+| I2 (destilado `prt_distill_*` con `synthetic`+`metadata.distilled/traceRef`) | OK |
+| I3 (tool stubeada `[distilled] …`, `metadata.preview` == `state.output`) | OK |
+| RESTORE (`buildRestoreOps` → execute → read-back == snapshot por `partHash`, creadas eliminadas) | OK 3/3 + 2/2 gone |
+
+⚠️ **Medición NO-COMPARABLE (finding, no aborta)**: el turno de comparación
+post-distill falla con `UnknownError` "Invalid prompt: The messages do not match
+the ModelMessage[] schema" (assistant vacío, 12 reintentos × 5 s) — con
+`muse-spark-1.3-contributor` Y con `gpt-oss-20b` (el rechazo es independiente del
+modelo; ver causa abajo). El Δ A−B no es medible en este entorno
+(`tokensA=35686`, `tokensBpre=35179`, ahorro `2992` chars ≈ `748` tokens
+estimados). CAVEAT registrado en el output: el Δ incluiría el mensaje de
+comparación + ruido del provider; es evidencia, no gate.
+
+**Causa precisa** (sonda acotada `scripts/smoke-distill-cause.ts`, 7 brazos,
+`gpt-oss-20b`, evidencia `.omo/evidence/task-17-cause-probe.log`): el que rompe
+el schema es el campo **`metadata` no-vacío en una text part**, no el
+`synthetic`, ni el id, ni el orden, ni el borrado:
+
+| Brazo | Inyección | Turno siguiente |
+|---|---|---|
+| a texto plano (`prt_cause_plain`) | 200 | OK |
+| e solo `synthetic:true` | 200 | OK |
+| g id `prt_distill_*` plano | 200 | OK |
+| d delete del text original | 200 | OK |
+| b `synthetic`+`metadata{distilled,traceRef}` | 200 | **REJECTED** |
+| f solo `metadata{distilled,traceRef}` | 200 | **REJECTED** |
+| c tool stubeada (`output`+`metadata.preview`) | 200 | **REJECTED** |
+
+El store acepta todo (`200` en los 7 writes); el rechazo ocurre al construir el
+prompt del turno siguiente. Hipótesis del mecanismo: el projector serializa
+`metadata` dentro del mensaje del provider y el schema `ModelMessage[]` lo
+rechaza (o la tool stubeada pierde `title`/`time` requeridos al reescribirse).
+NO es el orden `text-after-step-finish` (el brazo a también deja texto al final
+y pasa) ni el flag `synthetic` solo (brazo e pasa).
+
+**Consecuencias de diseño**:
+
+1. El restore por cadena real del journal funciona end-to-end (pristine →
+   write-diff → execute → read-back idéntico por hash). La cadena DEC-4 está
+   validada contra un server vivo, no solo en unit tests.
+2. ⚠️ **Finding para el plan owner (defecto real, `src/` intacto)**: I2
+   (procedencia marcada vía `metadata`) e I3 (coherencia vía
+   `metadata.preview`) son persistibles (verificados en task #2) pero el tramo
+   marcado **rompe el turno siguiente** en este entorno: cualquier text part con
+   `metadata` no-vacío hace que el provider rechace el prompt. Opciones: (a)
+   marcar procedencia sin `metadata` (p. ej. prefijo textual `[distilled …]` en
+   el `text`, ya presente en el tool-stub), (b) verificar si el rechazo es
+   específico de LiteLLM/proxy vs OpenCode projector, (c) medir con un provider
+   que tolere metadata. Decisión pendiente — tasks #18-20 no deberían asumir que
+   el tramo destilado es conversable.
+3. `buildRestoreOps` opera sobre partes mutables (`text`/`reasoning`/`tool`):
+   pasarle el mapa completo (con `step-start`/`step-finish`) refusea con
+   `disallowed-part-type`. El flow filtra antes de llamar (el smoke lo hace
+   explícito en `mutableOnly`).
+4. Nota de modelo: `gpt-oss-20b` como destilador NO sirve — devuelve los stubs
+   como `[1]: read el archivo…` (con corchetes) y `parseDistillOutput` lo
+   rechaza (`Unparseable stub line`, 3/3 intentos idénticos). El destilador queda
+   en `muse-spark-1.3-contributor`.
