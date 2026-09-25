@@ -34,7 +34,7 @@ Timeline textual por mensaje + breakdown estimado responden al pedido de Fede ("
 ## Consecuencias
 
 - El transcript del destilador se construye ya filtrado; el modo condicional vive en `src/distill.ts` (`buildTranscript`) y en `src/pure.ts` (`buildRewritePlan`, `selectedChars`, `charsByType`, `buildTypeBreakdown`).
-- Presets + custom cubren el 99% sin obligar a escribir; `parseTypeSpec` rechaza con `"Invalid content types, use: text, reasoning, tool"` y no hace writes.
+- Presets + custom cubren el 99% sin obligar a escribir; `parseTypeSpec` rechaza con `"Invalid content types — use: text, reasoning, tool"` y no hace writes.
 - `metadata.types` en el trace permite auditar qué se destiló y re-distillar con el mismo scope.
 - Fallback safe-mode si `DialogSelect` falla: el usuario sigue pudiendo destilar (current turn, all types) en vez de quedarse sin operación.
 - Tokens siempre calificados como `estimate` (D11); el timeline es textual (`DialogSelect`), no gráfico.

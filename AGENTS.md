@@ -12,7 +12,7 @@ sin compactar todo ni forkear.
 
 ## Estado
 
-✅ **Construido.** Plugin TUI funcional con 223 tests en verde (`bun test`), smokes de evidencia contra server `--pure`, y QA manual en TUI real. La cadena completa de trazas (DEC-4) y la ventana de selección timeline+tipos (DEC-5) están implementadas. Ver limitaciones conocidas en `README.md` (metadata rompe el turno siguiente, decisión del owner pendiente, Q2 inconclusa) y en `docs/02`/`docs/04`.
+✅ **Construido.** Plugin TUI funcional con 233 tests en verde (`bun test`), smokes de evidencia contra server `--pure`, y QA manual en TUI real. La cadena completa de trazas (DEC-4) y la ventana de selección timeline+tipos (DEC-5) están implementadas. Ver limitaciones conocidas en `README.md` (metadata rompe el turno siguiente, decisión del owner pendiente, Q2 inconclusa) y en `docs/02`/`docs/04`.
 
 ## Stack
 
@@ -34,7 +34,7 @@ sin compactar todo ni forkear.
 | Decisiones de arquitectura | [`docs/adr/`](docs/adr/), `0001-reescritura-a-nivel-de-parte`, `0002-cadena-de-trazas` (DEC-4), `0003-seleccion-timeline-tipos` (DEC-5) |
 | Diagramas (Mermaid puro, `.mmd`) | [`docs/diagrams/`](docs/diagrams/), `flujo-distill.mmd` (distill + restore + cadena) |
 | Código fuente | [`src/`](src/), `pure.ts` (selección/plan/I1,I8/hashes/estimates), `distill.ts` (prompt/transcript filtrado/parser), `journal.ts` (trace JSONL + `pristineReconstruct`/`buildRestoreOps`), `ports.ts` (FlowPorts), `flow.ts` (orquestación distill + restore), `tui.ts` (registro y adaptadores) |
-| Tests | [`test/`](test/), 15 archivos, 223 tests (pure/plan/invariantes/journal/distill/flow/chain/timeline/estimates/entry/contract/tui-part) |
+| Tests | [`test/`](test/), 15 archivos, 233 tests (pure/plan/invariantes/journal/distill/flow/chain/timeline/estimates/entry/contract/tui-part) |
 | QA manual | [`QA.md`](QA.md), 22 casos con strings exactos de `src/flow.ts` |
 | Evidencia reproducible (smokes) | [`scripts/`](scripts/), harness `run-smoke.sh` + smokes (`smoke-part-update`, `smoke-metadata`, `smoke-part-order`, `smoke-compaction-boundary`, `smoke-busy`, `smoke-distill-e2e`, `smoke-chain`, `smoke-context-markers`) |
 
@@ -43,7 +43,7 @@ sin compactar todo ni forkear.
 ```bash
 bun install                                              # baja el SDK (devDependency)
 bun run build                                            # compila src -> dist (requerido antes de bun test)
-bun test                                                 # 223 tests en verde
+bun test                                                 # 233 tests en verde
 bun run typecheck                                        # tsc --noEmit + tsc -p tsconfig.test.json
 scripts/run-smoke.sh scripts/smoke-part-update.ts        # harness: levanta server y corre el smoke
 ```
@@ -96,5 +96,5 @@ internos de 180,240 s) y el reasoning part es no-determinista (ver
 
 - `bun run build` → `tsc -p tsconfig.json` (`src/` → `dist/` con `.js`/`.d.ts`/maps).
 - `bun run typecheck` → `tsc --noEmit && tsc -p tsconfig.test.json`.
-- `bun test` → corre `pretest` (build) y luego `bun test` (15 archivos, 223 tests). Todos los tests importan de `src/` (regla hard).
+- `bun test` → corre `pretest` (build) y luego `bun test` (15 archivos, 233 tests). Todos los tests importan de `src/` (regla hard).
 - `npm pack` incluye solo `dist/` + `README.md` + `LICENSE` + `package.json` (`files: ["dist"]`); `scripts/` y `docs/` quedan en git, fuera del tarball.

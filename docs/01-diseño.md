@@ -172,6 +172,8 @@ Transcript:
 | # | Invariante | Enforcement |
 |---|---|---|
 | I1 | Ningún mensaje del stretch queda con 0 partes visibles (ensamblado de mensaje vacío: no verificado) | Cada mensaje retiene ≥1 `text` no vacío en todo estado intermedio y final |
+
+> NOTA DE ESTADO (no cambia el diseño): la implementación hace cumplir I1 como "≥1 parte visible (`text`/`reasoning` con texto, o `tool` con output/error)" — siguiendo el OUTCOME de la columna ("0 partes visibles") — en vez del literal "≥1 `text`" de la columna de mecanismo, porque hay tramos reales con mensajes assistant solo-tool. Decisión de revisión F2 (2026-09-25), fix commit `cb0b3df`.
 | I2 | Procedencia marcada | `synthetic:true` + `metadata.distilled`/`stub` con `traceRef` |
 | I3 | Coherencia tool ↔ texto ↔ preview | Tool conservado → `state.output` stub + `metadata.preview` en consonancia; tool borrado → ningún `callID` huérfano en texto |
 | I4 | Contabilidad/reversibilidad intocadas | **Allowlist duro**: solo ops sobre `text`/`reasoning`/`tool`; una op fuera → plan inválido |
