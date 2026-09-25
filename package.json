@@ -1,7 +1,7 @@
 {
   "name": "opencode-distill",
-  "version": "0.0.0",
-  "description": "OpenCode TUI plugin: destila tramos descarrilados de una sesión in-place (reescribe partes, no mensajes).",
+  "version": "1.0.0",
+  "description": "OpenCode TUI plugin: distill derailed stretches of a session in place (rewrites message parts, not whole messages).",
   "license": "MIT",
   "repository": {
     "type": "git",
