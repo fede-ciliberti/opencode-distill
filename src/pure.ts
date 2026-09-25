@@ -711,19 +711,24 @@ export function simulatePlan(
     }
   }
 
-  // I3 coherencia tool ↔ preview: preview == output cuando alguno existe.
+  // I3 coherencia tool ↔ preview: solo para las tool parts que el plan reescribió
+  // (docs/02:79-81: el preview del server es campo separado y puede ir stale en
+  // tool parts intactas; exigir igualdad en todas rechazaría planes válidos).
+  const rewrittenToolIDs = new Set<string>()
+  for (const op of plan.ops) {
+    if (op.kind === "update" && op.part.type === "tool") {
+      rewrittenToolIDs.add(op.part.id)
+    }
+  }
   for (const messageID of plan.stretch.messageIDs) {
     const parts = state.get(messageID) ?? []
     for (const part of parts) {
       if (part.type !== "tool") continue
+      if (!rewrittenToolIDs.has(part.id)) continue
       const output = part.state?.output
       const preview = (part.metadata as Record<string, unknown> | undefined)?.["preview"] as string | undefined
-      const hasOutput = output !== undefined
-      const hasPreview = preview !== undefined
-      if (hasOutput || hasPreview) {
-        if (output !== preview) {
-          return { ok: false, invariant: "I3", message: `Tool ${part.id} preview != output` }
-        }
+      if (output !== preview) {
+        return { ok: false, invariant: "I3", message: `Tool ${part.id} preview != output` }
       }
     }
   }
