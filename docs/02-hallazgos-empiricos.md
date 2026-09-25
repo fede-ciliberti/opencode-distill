@@ -86,3 +86,24 @@ incoherencia visible: hay que reescribir también el preview o removerlo.
   variar por provider (ver [`03-investigacion-opencode.md`](03-investigacion-opencode.md)).
 - ⚠️ No se midió prompt caching ni compactación.
 - ⚠️ `part.update` sobre **mensajes de usuario** no se probó (el diseño no lo usa).
+
+## Persistencia de metadata y synthetic ✅
+
+Corrida `smoke-metadata.ts` (server aislado `--pure`, OpenCode 1.18.32, SDK v2).
+Diseño sin-modelo: el mensaje contenedor se crea con `prompt(noReply:true)` y la
+tool part de la sonda B se siembra por upsert — las 4 sondas preguntan por
+**persistencia en el store** (read-back vía `session.messages`), no por
+comportamiento del LLM.
+
+| Sonda | Operación | Resultado |
+|---|---|---|
+| A | Upsert text nueva con `synthetic:true` + `metadata:{distilled,traceRef}` | ✅ `200`; read-back verbatim de ambos campos |
+| B | Tool sembrada por upsert → reescribir `state.output` + `metadata.preview` | ✅ `200`; ambos persisten (el preview NO va stale si se reescribe junto al output) |
+| C | Re-update de la misma parte tocando solo `text` | ✅ `200`; `metadata`/`synthetic` sobreviven (el update es merge del objeto, no reemplazo) |
+| D | Upsert `prt_stub_*` con `metadata:{stub,traceRef}` | ✅ `200`; read-back verbatim |
+
+**Consecuencia de diseño**: I2 (procedencia marcada) e I3 (coherencia
+tool↔preview) son implementables con `part.update`: el marcado
+`synthetic`+`metadata` persiste, sobrevive a re-toques de otros campos, y el
+`metadata.preview` se puede reescribir en consonancia con `state.output`
+(cierra el hallazgo §5: el preview solo va stale si NO se reescribe).
