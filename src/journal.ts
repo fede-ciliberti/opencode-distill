@@ -4,7 +4,7 @@
 // Append-only: jamás se reescriben líneas existentes.
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { TraceEntry } from "./pure.js"
+import type { PartLike, PartOp, TraceEntry } from "./pure.js"
 
 export type { TraceEntry }
 
@@ -223,4 +223,148 @@ export function latestTrace(directory: string, sessionID: string): LatestTraceRe
   if (!res.ok) return res
   const first = res.traces[0]
   return { ok: true, trace: first }
+}
+
+// --- Cadena completa DEC-4: pristineReconstruct + buildRestoreOps (task #11). ---
+// Inversión reverse-cronológica de trazas intersectantes (status-independiente,
+// idempotente); restore = write-diff prístino-vs-actual (UPDATEs→DELETEs).
+
+/** Tipos de parte mutables (allowlist I4, espejo de pure.ts). */
+const MUTABLE_PART_TYPES: ReadonlySet<string> = new Set(["text", "reasoning", "tool"])
+
+export type ChainErrorReason = "corrupt-trace" | "disallowed-part-type"
+
+export type ChainError = { ok: false; reason: ChainErrorReason; message: string }
+
+/** Trazas cuyo stretch intersecta los mensajes objetivo (sanas o corruptas). */
+export function intersectingTraces(
+  traces: readonly ReadTrace[],
+  messageIDs: readonly string[],
+): readonly ReadTrace[] {
+  const wanted = new Set(messageIDs)
+  return traces.filter((trace) => {
+    if (!trace.ok) {
+      // La corrupta no tiene stretch legible: se conserva para que el
+      // consumidor la refuse (Metis F3), no se filtra en silencio.
+      return true
+    }
+    return trace.entry.stretch.some((id) => wanted.has(id))
+  })
+}
+
+export type PristineResult =
+  | { ok: true; pristine: ReadonlyMap<string, readonly PartLike[]> }
+  | ChainError
+
+function samePartContent(a: PartLike, b: PartLike): boolean {
+  return (
+    a.id === b.id &&
+    a.sessionID === b.sessionID &&
+    a.messageID === b.messageID &&
+    a.type === b.type &&
+    a.text === b.text &&
+    a.synthetic === b.synthetic &&
+    a.state?.status === b.state?.status &&
+    a.state?.output === b.state?.output &&
+    a.state?.error === b.state?.error &&
+    JSON.stringify(a.metadata ?? null) === JSON.stringify(b.metadata ?? null)
+  )
+}
+
+/**
+ * Reconstruye el contenido prístino: parte del estado actual y aplica las
+ * trazas intersectantes en orden NEWEST→OLDEST; por traza: (1) upsert de cada
+ * original verbatim, (2) remoción de createdPartIDs. Idempotente por
+ * construcción (invertir lo ya invertido = no-op). Traza corrupta
+ * intersectante → refuse corrupt-trace.
+ */
+export function pristineReconstruct(
+  partsByMessage: ReadonlyMap<string, readonly PartLike[]>,
+  traces: readonly ReadTrace[],
+  messageIDs: readonly string[],
+): PristineResult {
+  const wanted = new Set(messageIDs)
+  const hits = intersectingTraces(traces, messageIDs)
+  for (const trace of hits) {
+    if (!trace.ok) {
+      return { ok: false, reason: "corrupt-trace", message: `Corrupt trace: ${trace.file}` }
+    }
+  }
+  // Copia mutable por mensaje objetivo; el resto de los mensajes no se toca.
+  const out = new Map<string, PartLike[]>()
+  for (const id of wanted) {
+    out.set(id, [...(partsByMessage.get(id) ?? [])])
+  }
+  // Orden NEWEST→OLDEST garantizado acá adentro (no se confía en el orden
+  // de entrada; no se muta el array del llamador).
+  const ordered = [...hits].sort((a, b) => (b.ok ? b.ts : -1) - (a.ok ? a.ts : -1))
+  for (const trace of ordered) {
+    if (!trace.ok) continue
+    const created = new Set(trace.entry.createdPartIDs)
+    for (const { messageID, part } of trace.entry.originals) {
+      if (!wanted.has(messageID)) continue
+      const parts = out.get(messageID) ?? []
+      const idx = parts.findIndex((p) => p.id === part.id)
+      if (idx >= 0) {
+        parts[idx] = { ...part }
+      } else {
+        parts.push({ ...part })
+      }
+      out.set(messageID, parts)
+    }
+    for (const [messageID, parts] of out) {
+      out.set(
+        messageID,
+        parts.filter((p) => !created.has(p.id)),
+      )
+    }
+  }
+  const pristine = new Map<string, readonly PartLike[]>()
+  for (const [id, parts] of out) {
+    pristine.set(id, parts)
+  }
+  return { ok: true, pristine }
+}
+
+export type RestoreOpsResult = { ok: true; ops: readonly PartOp[] } | ChainError
+
+/**
+ * Write-diff prístino-vs-actual dentro del stretch de T (I5): prístino
+ * ausente/cambiado en actual → update (spread del original verbatim);
+ * actual sin prístino → delete. Orden UPDATEs→DELETEs (crash-safety).
+ * Allowlist I4 sobre lo emitido (solo text/reasoning/tool).
+ */
+export function buildRestoreOps(
+  currentParts: ReadonlyMap<string, readonly PartLike[]>,
+  pristine: ReadonlyMap<string, readonly PartLike[]>,
+  stretchMessageIDs: readonly string[],
+): RestoreOpsResult {
+  const wanted = new Set(stretchMessageIDs)
+  const updates: PartOp[] = []
+  const deletes: PartOp[] = []
+  for (const messageID of wanted) {
+    const current = currentParts.get(messageID) ?? []
+    const want = pristine.get(messageID) ?? []
+    const currentByID = new Map(current.map((p) => [p.id, p]))
+    const wantByID = new Map(want.map((p) => [p.id, p]))
+    for (const part of want) {
+      if (!MUTABLE_PART_TYPES.has(part.type)) {
+        return {
+          ok: false,
+          reason: "disallowed-part-type",
+          message: `Disallowed part type in restore: ${part.type}`,
+        }
+      }
+      const cur = currentByID.get(part.id)
+      if (cur === undefined || !samePartContent(cur, part)) {
+        updates.push({ kind: "update", messageID, part: { ...part } })
+      }
+    }
+    for (const part of current) {
+      if (!wantByID.has(part.id)) {
+        deletes.push({ kind: "delete", messageID, partID: part.id })
+      }
+    }
+  }
+  return { ok: true, ops: [...updates, ...deletes] }
 }
