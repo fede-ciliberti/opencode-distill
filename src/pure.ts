@@ -2,6 +2,7 @@
 // Sin dependencias, sin efectos, sin acceso a `api`. Sin importar el SDK.
 //
 // Convenciones: copy de UI en inglés, comentarios en español rioplatense.
+import { estTokens } from "./distill.js"
 
 /** Parte de un mensaje (forma mínima que consume el plugin). */
 export type PartLike = {
@@ -769,4 +770,191 @@ export function simulatePlan(
   }
 
   return { ok: true }
+}
+
+// --- Timeline de selección + estimaciones honestas (task #13, DEC-5, D11). ---
+// Copy de UI en inglés; todo número de tokens lleva "(estimate)" (D11) y el
+// ahorro de reasoning advierte dependencia del provider (docs/03:53-65).
+
+/** Valor de una opción del DialogSelect de timeline (presets + filas From). */
+export type StretchOptionValue = StretchSpec
+
+export type StretchOption = {
+  title: string
+  description?: string
+  value: StretchOptionValue
+}
+
+export type StretchOptions = {
+  presets: readonly StretchOption[]
+  rows: readonly StretchOption[]
+}
+
+/** Valor de una opción del DialogSelect de tipos (presets + Custom…). */
+export type TypeOptionValue = TypeFilter | { custom: true }
+
+export type TypeOption = {
+  title: string
+  value: TypeOptionValue
+}
+
+export type DistillEstimates = {
+  cacheInvalidationFrom: string
+  oneTimeRepriceTokens: number
+  savingPerTurnTokens: number
+  estBreakEvenTurns: number
+}
+
+export type ConfirmRange = { firstID: string; lastID: string }
+
+export type RestoreTraceInfo = {
+  createdAt: number
+  stretch: readonly string[]
+}
+
+function firstTextOf(parts: readonly PartLike[]): string {
+  for (const part of parts) {
+    if (part.type === "text") return part.text ?? ""
+  }
+  return ""
+}
+
+const ALL_TYPES: TypeFilter = new Set<PartTypeName>(["text", "reasoning", "tool"])
+const TEXT_REASONING: TypeFilter = new Set<PartTypeName>(["text", "reasoning"])
+const REASONING_ONLY: TypeFilter = new Set<PartTypeName>(["reasoning"])
+const TOOL_ONLY: TypeFilter = new Set<PartTypeName>(["tool"])
+
+/**
+ * Opciones puras para la cadena de diálogos del flow (DEC-5):
+ * presets (Current turn / Last 3 / Last 5 / All) + una fila por mensaje
+ * assistant elegible (post-boundary, no summary, con masa > 0). Cada fila
+ * "From X" significa "desde X hasta el final"; la selección del End reusa
+ * la misma lista (el flow la encadena).
+ */
+export function buildStretchOptions(
+  messages: readonly MessageLike[],
+  boundary: string | undefined,
+): StretchOptions {
+  const byId = indexById(messages)
+  const startAfter = boundary === undefined ? -1 : (byId.get(boundary) ?? -1)
+
+  const eligible: AssistantMessageLike[] = []
+  for (let i = startAfter + 1; i < messages.length; i++) {
+    const m = messages[i]
+    if (m === undefined || !isAssistantMessage(m)) continue
+    if (m.summary === true) continue
+    if (selectedChars(m.parts, ALL_TYPES) === 0) continue
+    eligible.push(m)
+  }
+
+  const firstID = eligible[0]?.id ?? ""
+  const lastID = eligible[eligible.length - 1]?.id ?? ""
+
+  const presets: readonly StretchOption[] = [
+    { title: "Current turn", value: { kind: "current-turn" } },
+    { title: "Last 3", value: { kind: "last-n", n: 3 } },
+    { title: "Last 5", value: { kind: "last-n", n: 5 } },
+    { title: "All assistant messages", value: { kind: "range", firstID, lastID } },
+  ]
+
+  const rows: readonly StretchOption[] = eligible.map((m) => {
+    const buckets = charsByType(m.parts)
+    const total = buckets.text + buckets.reasoning + buckets.tool
+    const preview = firstTextOf(m.parts).slice(0, 40)
+    return {
+      title: `From ${m.id}: "${preview}"`,
+      description: `text ${buckets.text} · reasoning ${buckets.reasoning} · tool ${buckets.tool} (≈${estTokens(total)} tok, estimate)`,
+      value: { kind: "range", firstID: m.id, lastID },
+    }
+  })
+
+  return { presets, rows }
+}
+
+/** Presets del DialogSelect de tipos; "Custom…" lleva al DialogPrompt (parseTypeSpec). */
+export function buildTypeOptions(): readonly TypeOption[] {
+  return [
+    { title: "Everything (text + reasoning + tool outputs)", value: ALL_TYPES },
+    { title: "Everything but tool outputs", value: TEXT_REASONING },
+    { title: "Reasoning only", value: REASONING_ONLY },
+    { title: "Tool outputs only", value: TOOL_ONLY },
+    { title: "Custom…", value: { custom: true } },
+  ]
+}
+
+/**
+ * Breakdown por tipo para el DialogConfirm: totales por bucket sobre las
+ * partes ya filtradas al stretch, con tokens estimados y suffix de
+ * provider-dependence cuando reasoning está en los tipos.
+ */
+export function buildTypeBreakdown(
+  parts: readonly PartLike[],
+  types: TypeFilter,
+): string {
+  const buckets = charsByType(parts)
+  const text = types.has("text") ? buckets.text : 0
+  const reasoning = types.has("reasoning") ? buckets.reasoning : 0
+  const tool = types.has("tool") ? buckets.tool : 0
+  const total = text + reasoning + tool
+  const base = `text ${text} + reasoning ${reasoning} + tool ${tool} chars selected (≈${estTokens(total)} tokens, estimate)`
+  return types.has("reasoning")
+    ? `${base} — reasoning savings are provider-dependent`
+    : base
+}
+
+/**
+ * Estimaciones honestas (D11): saving por turno = lo que deja de pagarse;
+ * reprice one-time = lo que vuelve a pagar el cache tras invalidar desde el
+ * primer mensaje; break-even con max(1,…) para no dividir por cero.
+ * `charsAfterStretch` lo computa el flow (Σ chars visibles post-stretch).
+ */
+export function buildEstimates(
+  beforeChars: number,
+  afterChars: number,
+  charsAfterStretch: number,
+  firstMsgID: string,
+): DistillEstimates {
+  const savingPerTurnTokens = estTokens(beforeChars - afterChars)
+  const oneTimeRepriceTokens = estTokens(afterChars + charsAfterStretch)
+  const estBreakEvenTurns = Math.ceil(
+    oneTimeRepriceTokens / Math.max(1, savingPerTurnTokens),
+  )
+  return { cacheInvalidationFrom: firstMsgID, oneTimeRepriceTokens, savingPerTurnTokens, estBreakEvenTurns }
+}
+
+/** DialogConfirm de 5 líneas exactas (D1): rango, breakdown, contexto, cache, trace. */
+export function buildConfirmMessage(
+  range: ConfirmRange,
+  nMessages: number,
+  typeBreakdown: string,
+  beforeChars: number,
+  afterChars: number,
+  estimates: DistillEstimates,
+): string {
+  return [
+    `Distill ${nMessages} assistant messages (${range.firstID}..${range.lastID})?`,
+    typeBreakdown,
+    `Context: ${beforeChars} chars → ${afterChars} chars (≈${estimates.savingPerTurnTokens} tokens saved, estimate)`,
+    `Prompt cache: one-time reprice ≈${estimates.oneTimeRepriceTokens} tokens; breaks even after ≈${estimates.estBreakEvenTurns} turns (estimate)`,
+    "Originals are preserved in a local trace; /distill-restore undoes this.",
+  ].join("\n")
+}
+
+/** DialogConfirm del restore: fecha ISO del trace + cantidad de mensajes. */
+export function buildRestoreConfirmMessage(trace: RestoreTraceInfo): string {
+  const date = new Date(trace.createdAt).toISOString()
+  return [
+    `Restore distillation from ${date} (${trace.stretch.length} messages)?`,
+    "This rewrites the session back to the original content from the trace.",
+  ].join("\n")
+}
+
+/** Toast de REPORT: chars medibles + tokens siempre calificados (D11). */
+export function buildReportToast(
+  nMessages: number,
+  beforeChars: number,
+  afterChars: number,
+): string {
+  const saved = beforeChars - afterChars
+  return `Distilled ${nMessages} messages — ~${saved} chars saved (≈${estTokens(saved)} tokens, estimate)`
 }
