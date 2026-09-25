@@ -25,11 +25,15 @@
 - **Cómo cerrar**: `prompt` con `noReply:true` y luego `session.messages` — ¿aparece
   el mensaje del user?
 
-## Q4 — ¿`part.update` con sesión busy devuelve 409?
+## Q4 — ¿`part.update` con sesión busy devuelve 409? ✅ (no)
 
-- **Por qué importa**: define el guard. El diseño exige sesión idle igual, así que
-  es *moot*, pero conviene saberlo para el mapeo de errores.
-- **Cómo cerrar**: disparar un prompt async y, sin esperar, intentar `part.update`.
+- **Hallazgo**: no. `smoke-busy.ts` confirma que con `session.status = {"type":"busy"}`
+  tanto `part.update` como `part.delete` devuelven `200` y aplican el write igual que
+  en idle; `session.messages` también devuelve `200`. No existe shape de error busy.
+- **Implicancia**: el guard de sesión idle tiene que ser client-side (`session.status`
+  pre-EXECUTE + re-check); el server no protege contra writes concurrentes al turno.
+  `mapUpdateError` (todo 14) no lleva rama busy por status/error — busy se detecta
+  por `session.status`.
 
 ## Q5 — Serialización de `metadata` al modelo
 

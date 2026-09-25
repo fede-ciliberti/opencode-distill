@@ -154,3 +154,32 @@ Corrida `PORT=4714 LOG=/tmp/opencode/distill-smoke-4.log scripts/run-smoke.sh sc
 **Regla de frontera I7 (FALLBACK, fijo)**: como `tail_start_id` no es legible,
 la frontera = **inicio de sesión** (todo stretch es válido). El stretch igual
 debe excluir mensajes con `summary:true` o partes `type:"compaction"`.
+
+## Escrituras con sesión busy ✅
+
+Corrida `smoke-busy.ts` (server `--pure` 1.18.32, modelo `litellm/muse-spark-1.3-contributor`):
+sesión scratch con turno setup en idle, luego `promptAsync` (ensayo de 500 palabras,
+`204` inmediato) y probes mientras `session.status` = `{"type":"busy"}`.
+
+| Operación | busy | idle |
+|---|---|---|
+| `part.update` de parte existente | `200` (aplica el write) | `200` |
+| `part.delete` de parte existente | `200 true` | `200 true` |
+| `session.messages` (lectura) | `200` (permitida) | `200` |
+| `session.status` | `{"type":"busy"}` | `{}` (clave ausente = idle) |
+
+**No hay 409.** El server **no** rechaza writes con sesión busy: `part.update` y
+`part.delete` aplican igual que en idle, sin error ni shape distintivo. Tampoco hay
+shape de error busy que mapear: la columna busy es idéntica a la idle.
+
+**Consecuencia de diseño**: el guard 5 (`solo writes con sesión idle`, diseño §8)
+tiene que ser **client-side** (`session.status` antes de EXECUTE + re-check
+pre-EXECUTE, como ya prevé el flow del todo 14). El server no te protege de
+pisar un turno en curso; un write en busy puede corromper el tramo que el modelo
+está generando. Para `mapUpdateError` (todo 14): no existe rama busy por
+status/error-body — busy se detecta por `session.status`, no por el error del write.
+
+Notas de método: `prompt` bloquea hasta el fin del turno (no sirve para busy);
+hay que usar `promptAsync` (`204` inmediato). `session.status` devuelve un mapa
+`sessionID → {type:"busy"}`; en idle la clave de la sesión está ausente (`{}`).
+Timeouts usados: setup-turn 240 s, waitForIdle 240 s, cleanup-idle 30 s.
