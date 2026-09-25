@@ -491,3 +491,277 @@ export function buildRewritePlan(
     mass: { beforeChars, afterChars, cacheInvalidationFrom: firstID, estBreakEvenTurns },
   }
 }
+
+// --- Simulación de invariantes I1–I8 + hashes anti-drift (task #8). ---
+
+/** JSON.stringify con keys recursivamente ordenadas (determinismo para hashes). */
+export function stableStringify(value: unknown): string | undefined {
+  return JSON.stringify(sortValue(value))
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortValue)
+  }
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>
+    const keys = Object.keys(obj).sort()
+    const out: Record<string, unknown> = {}
+    for (const k of keys) {
+      out[k] = sortValue(obj[k])
+    }
+    return out
+  }
+  return value
+}
+
+/** FNV-1a-64 (bigint, implementación propia) sobre stableStringify(part) → hex 16 lowercase. */
+export function partHash(part: PartLike): string {
+  const str = stableStringify(part) ?? ""
+  const bytes = new TextEncoder().encode(str)
+  let h = 14695981039346656037n
+  const prime = 1099511628211n
+  const mask = (1n << 64n) - 1n
+  for (const b of bytes) {
+    h ^= BigInt(b)
+    h = (h * prime) & mask
+  }
+  return h.toString(16).padStart(16, "0")
+}
+
+function deepCopyPart(part: PartLike): PartLike {
+  return JSON.parse(JSON.stringify(part)) as PartLike
+}
+
+export type SnapshotForTraceResult = {
+  originals: ReadonlyArray<{ messageID: string; part: PartLike }>
+  hashes: ReadonlyArray<{ partID: string; hash: string }>
+}
+
+/**
+ * Snapshot para el trace: originales verbatim de las partes mutables
+ * (text/reasoning/tool) del stretch + hashes por parte para RE-VALID.
+ */
+export function snapshotForTrace(
+  stretch: Stretch,
+  partsByMessage: ReadonlyMap<string, readonly PartLike[]>,
+): SnapshotForTraceResult {
+  const allowed: ReadonlySet<string> = new Set(["text", "reasoning", "tool"])
+  const originals: Array<{ messageID: string; part: PartLike }> = []
+  const hashes: Array<{ partID: string; hash: string }> = []
+  for (const messageID of stretch.messageIDs) {
+    const parts = partsByMessage.get(messageID) ?? []
+    for (const part of parts) {
+      if (!allowed.has(part.type)) continue
+      const copy = deepCopyPart(part)
+      originals.push({ messageID, part: copy })
+      hashes.push({ partID: part.id, hash: partHash(part) })
+    }
+  }
+  return { originals, hashes }
+}
+
+export type SimulateResult =
+  | { ok: true }
+  | { ok: false; invariant: string; afterOpIndex?: number; message?: string }
+
+export type SimulateOptions = {
+  originals?: ReadonlyArray<{ messageID: string; part: PartLike }>
+  userMessageIDs?: ReadonlySet<string>
+}
+
+/**
+ * Simula el plan sobre una copia del estado y verifica I1–I8.
+ * - Después de CADA op: I1 (todo mensaje del stretch retiene ≥1 text no vacío).
+ * - Al final: checklist I1–I8 completo (I2/I3/I4/I5/I6/I7/I8).
+ * Usa las partes REALES pasadas en partsByMessage, no las esperadas.
+ */
+export function simulatePlan(
+  plan: RewritePlan,
+  partsByMessage: ReadonlyMap<string, readonly PartLike[]>,
+  opts?: SimulateOptions,
+): SimulateResult {
+  const stretchSet = new Set<string>(plan.stretch.messageIDs)
+  const allowedTypes: ReadonlySet<string> = new Set(["text", "reasoning", "tool"])
+
+  // I7 upfront: compaction dentro del stretch (estado inicial).
+  for (const messageID of plan.stretch.messageIDs) {
+    const parts = partsByMessage.get(messageID) ?? []
+    for (const part of parts) {
+      if (part.type === "compaction") {
+        return { ok: false, invariant: "I7", message: `Compaction part ${part.id} inside stretch` }
+      }
+    }
+  }
+
+  // Índices del estado inicial para I2/I4/I8.
+  const initialIDs = new Set<string>()
+  const initialPartByID = new Map<string, PartLike>()
+  for (const messageID of plan.stretch.messageIDs) {
+    const parts = partsByMessage.get(messageID) ?? []
+    for (const part of parts) {
+      initialIDs.add(part.id)
+      if (!initialPartByID.has(part.id)) initialPartByID.set(part.id, part)
+    }
+  }
+
+  // Copia profunda del estado para simular.
+  const state = new Map<string, PartLike[]>()
+  for (const [messageID, parts] of partsByMessage.entries()) {
+    state.set(
+      messageID,
+      parts.map((p) => JSON.parse(JSON.stringify(p)) as PartLike),
+    )
+  }
+  // Asegurar que todo mensaje del stretch exista en el mapa (aunque vacío).
+  for (const messageID of plan.stretch.messageIDs) {
+    if (!state.has(messageID)) state.set(messageID, [])
+  }
+
+  function hasVisibleText(messageID: string): boolean {
+    const parts = state.get(messageID) ?? []
+    return parts.some((p) => p.type === "text" && (p.text ?? "") !== "")
+  }
+
+  for (let i = 0; i < plan.ops.length; i++) {
+    const op = plan.ops[i]
+    if (op === undefined) continue
+
+    // I5 localidad: op solo dentro del stretch.
+    if (!stretchSet.has(op.messageID)) {
+      return { ok: false, invariant: "I5", afterOpIndex: i, message: `Op outside stretch: ${op.messageID}` }
+    }
+
+    // I6 user messages inmutables (guard explícito).
+    if (opts?.userMessageIDs?.has(op.messageID) === true) {
+      return { ok: false, invariant: "I6", afterOpIndex: i, message: `Op on user message ${op.messageID}` }
+    }
+
+    // I4 allowlist sobre tipo fetch-eado y tipo nuevo.
+    if (op.kind === "delete") {
+      const existing = (state.get(op.messageID) ?? []).find((p) => p.id === op.partID)
+      // Si no está en el estado copiado, buscar en el inicial (ya borrado en intermedio).
+      const fetched = existing ?? initialPartByID.get(op.partID)
+      if (fetched !== undefined && !allowedTypes.has(fetched.type)) {
+        return { ok: false, invariant: "I4", afterOpIndex: i, message: `Delete of disallowed type ${fetched.type}` }
+      }
+      // También si el ID no existe, no es I4; se trata como no-op para I1.
+    } else {
+      const newType = op.part.type
+      if (!allowedTypes.has(newType)) {
+        return { ok: false, invariant: "I4", afterOpIndex: i, message: `Update to disallowed type ${newType}` }
+      }
+      const fetched = initialPartByID.get(op.part.id)
+      if (fetched !== undefined && !allowedTypes.has(fetched.type)) {
+        return { ok: false, invariant: "I4", afterOpIndex: i, message: `Update of disallowed fetched type ${fetched.type}` }
+      }
+    }
+
+    // Aplicar op sobre la copia.
+    if (op.kind === "update") {
+      const arr = state.get(op.messageID) ?? []
+      const idx = arr.findIndex((p) => p.id === op.part.id)
+      const copy = JSON.parse(JSON.stringify(op.part)) as PartLike
+      if (idx >= 0) {
+        arr[idx] = copy
+      } else {
+        arr.push(copy)
+      }
+      state.set(op.messageID, arr)
+    } else {
+      const arr = state.get(op.messageID) ?? []
+      state.set(
+        op.messageID,
+        arr.filter((p) => p.id !== op.partID),
+      )
+    }
+
+    // I1 después de cada op: todo mensaje del stretch retiene ≥1 text no vacío.
+    for (const messageID of plan.stretch.messageIDs) {
+      if (!hasVisibleText(messageID)) {
+        return { ok: false, invariant: "I1", afterOpIndex: i, message: `Message ${messageID} left without visible text` }
+      }
+    }
+  }
+
+  // --- Checks finales I1–I8 (I1 ya cubierto, pero se re-verifica) ---
+
+  // I1 final (redundante, ya verificado en intermedios).
+  for (const messageID of plan.stretch.messageIDs) {
+    if (!hasVisibleText(messageID)) {
+      return { ok: false, invariant: "I1", message: `Final: message ${messageID} without visible text` }
+    }
+  }
+
+  // I2 procedencia marcada: toda parte nueva (ID no en inicial) debe tener synthetic + marca.
+  for (const messageID of plan.stretch.messageIDs) {
+    const parts = state.get(messageID) ?? []
+    for (const part of parts) {
+      if (initialIDs.has(part.id)) continue
+      const meta = part.metadata as Record<string, unknown> | undefined
+      const hasSynthetic = part.synthetic === true
+      const hasMark =
+        meta !== undefined &&
+        (meta["distilled"] === true || meta["stub"] === true) &&
+        typeof meta["traceRef"] === "string" &&
+        (meta["traceRef"] as string) !== ""
+      if (!hasSynthetic || !hasMark) {
+        return { ok: false, invariant: "I2", message: `New part ${part.id} without provenance mark` }
+      }
+    }
+  }
+
+  // I3 coherencia tool ↔ preview: preview == output cuando alguno existe.
+  for (const messageID of plan.stretch.messageIDs) {
+    const parts = state.get(messageID) ?? []
+    for (const part of parts) {
+      if (part.type !== "tool") continue
+      const output = part.state?.output
+      const preview = (part.metadata as Record<string, unknown> | undefined)?.["preview"] as string | undefined
+      const hasOutput = output !== undefined
+      const hasPreview = preview !== undefined
+      if (hasOutput || hasPreview) {
+        if (output !== preview) {
+          return { ok: false, invariant: "I3", message: `Tool ${part.id} preview != output` }
+        }
+      }
+    }
+  }
+
+  // I4 final: ya verificado por op, pero también verificar que no queden partes nuevas con tipo disallowed (defensa).
+  for (const messageID of plan.stretch.messageIDs) {
+    const parts = state.get(messageID) ?? []
+    for (const part of parts) {
+      if (!initialIDs.has(part.id) && !allowedTypes.has(part.type)) {
+        return { ok: false, invariant: "I4", message: `Created part ${part.id} with disallowed type ${part.type}` }
+      }
+    }
+  }
+
+  // I5 ya verificado por op (localidad).
+
+  // I6 ya verificado por op.
+
+  // I7 ya verificado upfront.
+
+  // I8 reversibilidad: snapshot de originales para el trace.
+  if (plan.ops.length > 0) {
+    if (opts?.originals === undefined || opts.originals.length === 0) {
+      return { ok: false, invariant: "I8", message: "Missing originals snapshot for non-empty plan" }
+    }
+    const originalIDs = new Set<string>(opts.originals.map((o) => o.part.id))
+    for (const op of plan.ops) {
+      if (op.kind === "delete") {
+        if (!originalIDs.has(op.partID)) {
+          return { ok: false, invariant: "I8", message: `Delete ${op.partID} not in originals` }
+        }
+      } else {
+        if (initialIDs.has(op.part.id) && !originalIDs.has(op.part.id)) {
+          return { ok: false, invariant: "I8", message: `Update ${op.part.id} not in originals` }
+        }
+      }
+    }
+  }
+
+  return { ok: true }
+}
