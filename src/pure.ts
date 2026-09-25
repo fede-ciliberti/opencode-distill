@@ -241,7 +241,9 @@ export function selectStretch(
       )
     }
     start = assistants[assistants.length - spec.n] ?? 0
-    end = messages.length - 1
+    // El span termina en el último assistant, no al final de la lista:
+    // un user posterior (turno nuevo sin respuesta) no es parte del stretch.
+    end = assistants[assistants.length - 1] ?? 0
   } else {
     const byId = indexById(messages)
     const a = byId.get(spec.firstID)

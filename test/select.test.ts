@@ -213,6 +213,17 @@ describe("selectStretch last-n", () => {
     if (!got.ok) expect(got.kind).toBe("not-enough-messages")
   })
 
+  test("user posterior al último assistant no rompe el span", () => {
+    const messages: MessageLike[] = [
+      user("u1"),
+      bigAssistant("a1"),
+      bigAssistant("a2"),
+      user("u2"),
+    ]
+    const got = selectStretch(messages, { kind: "last-n", n: 2 }, undefined, ALL)
+    expect(got).toEqual({ ok: true, messageIDs: ["a1", "a2"] })
+  })
+
   test("user entre los últimos n → stretch-crosses-user-message", () => {
     const messages: MessageLike[] = [
       bigAssistant("a1"),
