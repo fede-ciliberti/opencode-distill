@@ -120,6 +120,12 @@ export type SelectOption<T> = {
 
 /** Diálogo de selección (timeline de tramos, tipos, trazas). */
 export interface Selector {
+  /**
+   * Capacidad safe-mode (ADR 0003): `false` cuando el host no expone
+   * `DialogSelect`; el flow degrada a `DialogConfirm` con current-turn +
+   * all types. Ausente/`true` = selector disponible (camino normal).
+   */
+  readonly selectAvailable?: boolean
   selectDialog<T>(
     title: string,
     options: readonly SelectOption<T>[],

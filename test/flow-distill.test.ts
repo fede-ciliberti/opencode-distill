@@ -58,6 +58,7 @@ function validDistillRaw(ids: readonly string[]): string {
 type ScratchModel = { providerID: string; modelID: string }
 
 class FakePorts implements FlowPorts {
+  selectAvailable?: boolean
   // state
   routeName = "session"
   sessionIDValue: string | undefined = "s1"
@@ -600,6 +601,61 @@ describe("runDistillFlow", () => {
     runDistillFlow(ports)
     await flush()
     expect(ports.toasts.some((t) => t.message.includes("Could not clean up"))).toBe(true)
+  })
+
+  test("GATE idle: session busy al inicio → refuse sin writes", async () => {
+    const dir = freshDir()
+    const ports = setupHappyPorts(dir)
+    ports.stateStatusValue = { type: "busy" }
+    runDistillFlow(ports)
+    await flush()
+    expect(ports.toasts.some((t) => t.message.includes("Session is busy — try again when it's idle"))).toBe(true)
+    expect(ports.appendPlannedCalls).toBe(0)
+    expect(ports.createScratchCalls).toBe(0)
+  })
+
+  test("GATE idle: retry al inicio → refuse sin writes", async () => {
+    const dir = freshDir()
+    const ports = setupHappyPorts(dir)
+    ports.stateStatusValue = { type: "retry" }
+    runDistillFlow(ports)
+    await flush()
+    expect(ports.toasts.some((t) => t.message.includes("Session is busy — try again when it's idle"))).toBe(true)
+    expect(ports.appendPlannedCalls).toBe(0)
+  })
+
+  test("safe-mode: sin selector → confirm con current-turn + all types", async () => {
+    const dir = freshDir()
+    const ports = setupHappyPorts(dir)
+    ports.selectAvailable = false
+    runDistillFlow(ports)
+    await flush()
+    expect(ports.selectCalls).toHaveLength(0)
+    expect(ports.confirmCalls.some((c) => c.message.includes("Distill the current turn with all content types?"))).toBe(true)
+    expect(ports.toasts.some((t) => t.variant === "success" && t.message.includes("Distilled"))).toBe(true)
+    expect(ports.appendPlannedCalls).toBe(1)
+  })
+
+  test("safe-mode: cancel en el confirm → retorno silencioso", async () => {
+    const dir = freshDir()
+    const ports = setupHappyPorts(dir)
+    ports.selectAvailable = false
+    ports.confirmAuto = ["cancel"]
+    runDistillFlow(ports)
+    await flush()
+    expect(ports.appendPlannedCalls).toBe(0)
+    expect(ports.createScratchCalls).toBe(0)
+  })
+
+  test("top-level catch: throw crudo del puerto → toast genérico, sin rejection", async () => {
+    const dir = freshDir()
+    const ports = setupHappyPorts(dir)
+    ports.listStateMessages = (_sessionID: string): readonly MessageLike[] => {
+      throw new Error("boom crudo")
+    }
+    runDistillFlow(ports)
+    await flush()
+    expect(ports.toasts.some((t) => t.message.includes("Distill failed — nothing was changed"))).toBe(true)
   })
 
   test("re-distill with previous trace (pristine != current) → plan targets current parts, no I8 abort", async () => {

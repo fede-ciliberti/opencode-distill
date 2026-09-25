@@ -573,7 +573,8 @@ export type SimulateOptions = {
 
 /**
  * Simula el plan sobre una copia del estado y verifica I1–I8.
- * - Después de CADA op: I1 (todo mensaje del stretch retiene ≥1 text no vacío).
+ * - Después de CADA op: I1 (todo mensaje del stretch retiene ≥1 parte visible:
+ *   text/reasoning con texto no vacío, o tool con output/error no vacío).
  * - Al final: checklist I1–I8 completo (I2/I3/I4/I5/I6/I7/I8).
  * Usa las partes REALES pasadas en partsByMessage, no las esperadas.
  */
@@ -619,9 +620,16 @@ export function simulatePlan(
     if (!state.has(messageID)) state.set(messageID, [])
   }
 
+  // NOTA F2: I1 sigue la OUTCOME del diseño (docs/01:162 "0 partes visibles"),
+  // no la columna mecanismo ("≥1 text"): una tool part con output/error no
+  // vacío es visible, así que un mensaje tool-only NO está vacío.
   function hasVisibleText(messageID: string): boolean {
     const parts = state.get(messageID) ?? []
-    return parts.some((p) => p.type === "text" && (p.text ?? "") !== "")
+    return parts.some((p) => {
+      if (p.type === "text" || p.type === "reasoning") return (p.text ?? "") !== ""
+      if (p.type === "tool") return ((p.state?.output ?? p.state?.error) ?? "") !== ""
+      return false
+    })
   }
 
   for (let i = 0; i < plan.ops.length; i++) {
@@ -677,7 +685,7 @@ export function simulatePlan(
       )
     }
 
-    // I1 después de cada op: todo mensaje del stretch retiene ≥1 text no vacío.
+    // I1 después de cada op: todo mensaje del stretch retiene ≥1 parte visible.
     for (const messageID of plan.stretch.messageIDs) {
       if (!hasVisibleText(messageID)) {
         return { ok: false, invariant: "I1", afterOpIndex: i, message: `Message ${messageID} left without visible text` }

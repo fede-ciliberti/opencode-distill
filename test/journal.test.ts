@@ -2,15 +2,17 @@
 // Failing-first: importan de ../src/journal.js (regla dura).
 // FS REAL (os.tmpdir + mkdtempSync por test); JAMÁS fakes de FS (Metis F10).
 import { afterEach, describe, expect, test } from "bun:test"
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   appendPlanned,
   appendStatus,
   latestTrace,
+  pristineReconstruct,
   readTraces,
   traceFilePath,
+  type ReadTrace,
   type TraceEntry,
 } from "../src/journal.js"
 import type { TraceEntry as PureTraceEntry } from "../src/pure.js"
@@ -249,6 +251,80 @@ describe("readTraces", () => {
     expect(res.ok).toBe(true)
     if (!res.ok) return
     expect(res.traces.length).toBe(1)
+  })
+
+  test("traza hueca (originals [null]) → corrupt, sin throw", () => {
+    const dir = freshDir()
+    const sessionDir = join(dir, ".opencode", "distill", "ses-1")
+    mkdirSync(sessionDir, { recursive: true })
+    const hollow = {
+      version: 1,
+      sessionID: "ses-1",
+      createdAt: 1000,
+      stretch: ["msg-a"],
+      originals: [null],
+      createdPartIDs: [],
+      plan: [],
+      distillate: { summary: "x", stubs: {} },
+      status: "planned",
+    }
+    writeFileSync(join(sessionDir, "1000.jsonl"), JSON.stringify(hollow) + "\n")
+    const res = readTraces(dir, "ses-1")
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.traces.length).toBe(1)
+    const first = res.traces[0]
+    expect(first?.ok).toBe(false)
+    if (first?.ok) return
+    expect(first.reason).toBe("corrupt")
+  })
+
+  test("traza hueca (stretch no-strings) → corrupt, sin throw", () => {
+    const dir = freshDir()
+    const sessionDir = join(dir, ".opencode", "distill", "ses-1")
+    mkdirSync(sessionDir, { recursive: true })
+    const hollow = {
+      version: 1,
+      sessionID: "ses-1",
+      createdAt: 1000,
+      stretch: [42],
+      originals: [],
+      createdPartIDs: [],
+      plan: [],
+      distillate: { summary: "x", stubs: {} },
+      status: "planned",
+    }
+    writeFileSync(join(sessionDir, "1000.jsonl"), JSON.stringify(hollow) + "\n")
+    const res = readTraces(dir, "ses-1")
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const first = res.traces[0]
+    expect(first?.ok).toBe(false)
+  })
+
+  test("pristineReconstruct con traza hueca en memoria → corrupt-trace, sin TypeError", () => {
+    const hollowEntry = {
+      version: 1,
+      sessionID: "ses-1",
+      createdAt: 1000,
+      stretch: ["msg-a"],
+      originals: [null],
+      createdPartIDs: [],
+      plan: [],
+      distillate: { summary: "x", stubs: {} },
+      status: "planned",
+    }
+    const hollowTrace = {
+      ok: true,
+      ts: 1000,
+      file: "mem.jsonl",
+      entry: hollowEntry,
+      status: "planned",
+    } as unknown as ReadTrace
+    const res = pristineReconstruct(new Map(), [hollowTrace], ["msg-a"])
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toBe("corrupt-trace")
   })
 })
 

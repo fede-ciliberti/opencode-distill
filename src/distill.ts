@@ -137,9 +137,9 @@ Format (strict, no preamble):
 ## Outcome
 <1-3 sentences>
 ## Ruled out
-- <hypothesis> — <evidence>
+- <hypothesis>, <evidence>
 ## Key facts
-- <artifact> — <why it matters>
+- <artifact>, <why it matters>
 ## Open
 - <... | none>
 </distillate>

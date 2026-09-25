@@ -507,6 +507,18 @@ describe("runRestoreFlow", () => {
     expect(ports.selectCalls).toHaveLength(0)
   })
 
+  test("top-level catch: throw crudo del puerto → toast genérico", async () => {
+    const { ports } = setupTwoTraces()
+    ports.readTraces = (_sessionID: string): ReadTracesResult => {
+      throw new Error("boom crudo")
+    }
+    runRestoreFlow(ports)
+    await flush()
+    expect(
+      ports.toasts.some((t) => t.message === "Restore failed — nothing was changed"),
+    ).toBe(true)
+  })
+
   test("stretch con step-start/step-finish llega a EXECUTE (regression QA #20)", async () => {
     const ports = new FakePorts()
     const stepStart: PartLike = { id: "prt-ss", sessionID: SESSION, messageID: "a1", type: "step-start" }

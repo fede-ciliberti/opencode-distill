@@ -132,8 +132,12 @@ All user-visible strings below are verbatim from `src/flow.ts` and `src/pure.ts`
 | Distilling | `Distilling stretch…` |
 | Could not clean up scratch session | `Could not clean up the scratch session` |
 | Distiller returned unparseable or over-budget output | `Distiller returned invalid output — nothing was changed` |
+| Distiller timed out (240s) | `Distiller timed out — nothing was changed` |
+| Distiller transport failure | `Could not reach opencode server — nothing was changed` |
+| Unexpected distill failure (top-level catch) | `Distill failed — nothing was changed` |
 | Internal plan validation failed | `Internal validation failed — nothing was changed` / `Internal validation failed — nothing was changed: <detail>` |
 | Could not write trace | `Could not write trace — nothing was changed: <detail>` |
+| Session busy at GATE (distill) | `Session is busy — try again when it's idle` |
 | Session busy at re-check (distill) | `Session is busy — distill aborted before any change` |
 | Conversation changed during distillation | `The conversation changed during distillation — nothing was changed` |
 | Part write failed, no writes yet | `<mapped> — nothing was changed` |
@@ -147,6 +151,7 @@ All user-visible strings below are verbatim from `src/flow.ts` and `src/pure.ts`
 | Restore: corrupt trace intersecting the stretch | `A related distill trace is corrupted — restore unavailable for this stretch` |
 | Restore: cannot build ops | `Restore cannot proceed — nothing was changed` |
 | Restore: part write failed | `<mapped> — Restore incomplete — re-run /distill-restore (it is safe to retry)` |
+| Unexpected restore failure (top-level catch) | `Restore failed — nothing was changed` |
 | Restore success | `Restore complete — original content is back` |
 
 `mapUpdateError` sub-messages (`<mapped>`):

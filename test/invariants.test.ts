@@ -158,7 +158,10 @@ describe("simulatePlan — I1 en intermedios (no solo al final)", () => {
   test("delete segundo deja vacío aunque el primero pasó: afterOpIndex 1", () => {
     const stretch = stretchOf("s1", "m1")
     const state = partsMap([
-      ["m1", [textPart("p1", "m1", "uno"), textPart("p2", "m1", "dos"), reasoningPart("r1", "m1", "x")]],
+      // NOTA F2: el reasoning queda con texto vacío para que no cuente como
+      // visible bajo la I1-outcome (text/reasoning no vacío o tool con output);
+      // así el segundo delete sí deja el mensaje sin partes visibles.
+      ["m1", [textPart("p1", "m1", "uno"), textPart("p2", "m1", "dos"), reasoningPart("r1", "m1", "")]],
     ])
     const ops: readonly PartOp[] = [
       { kind: "delete", messageID: "m1", partID: "p1" },
@@ -174,6 +177,38 @@ describe("simulatePlan — I1 en intermedios (no solo al final)", () => {
     if (res.ok) throw new Error("expected I1 violation")
     expect(res.invariant).toBe("I1")
     expect(res.afterOpIndex).toBe(1)
+  })
+  test("F2: stretch [text 600, tool-only output 600] con stub de tool → ok:true", () => {
+    const stretch = stretchOf("s1", "m1", "m2")
+    const t = toolPart("t1", "m2", "bash", "completed", "y".repeat(600))
+    const state = partsMap([
+      ["m1", [textPart("p1", "m1", "x".repeat(600))]],
+      ["m2", [t]],
+    ])
+    const distillate: PartLike = {
+      id: "prt_distill_f2",
+      sessionID: "s1",
+      messageID: "m1",
+      type: "text",
+      text: "resumen",
+      synthetic: true,
+      metadata: { distilled: true, traceRef: "f2" },
+    }
+    const stubbed: Toolish = {
+      ...t,
+      state: { status: "completed", output: "[distilled] bash — see distillate" },
+      metadata: { preview: "[distilled] bash — see distillate" },
+    }
+    const plan: RewritePlan = {
+      stretch,
+      ops: [
+        { kind: "update", messageID: "m1", part: distillate },
+        { kind: "update", messageID: "m2", part: stubbed },
+      ],
+      mass: { beforeChars: 1200, afterChars: 50, cacheInvalidationFrom: "m1", estBreakEvenTurns: 1 },
+    }
+    const res = simulatePlan(plan, state, { originals: originalsOf(stretch, state) })
+    expect(res).toEqual({ ok: true })
   })
 })
 

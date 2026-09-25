@@ -64,16 +64,31 @@ function isValidTs(ts: number): boolean {
   return Number.isInteger(ts) && ts >= 0
 }
 
+function isOriginalSnapshot(value: unknown): value is TraceEntry["originals"][number] {
+  if (typeof value !== "object" || value === null) return false
+  const v = value as Record<string, unknown>
+  if (typeof v["messageID"] !== "string") return false
+  const part = v["part"]
+  if (typeof part !== "object" || part === null) return false
+  return typeof (part as Record<string, unknown>)["id"] === "string"
+}
+
 function isTraceEntry(value: unknown): value is TraceEntry {
   if (typeof value !== "object" || value === null) return false
   const v = value as Record<string, unknown>
+  const stretch = v["stretch"]
+  const originals = v["originals"]
+  const createdPartIDs = v["createdPartIDs"]
   return (
     v["version"] === 1 &&
     typeof v["sessionID"] === "string" &&
     typeof v["createdAt"] === "number" &&
-    Array.isArray(v["stretch"]) &&
-    Array.isArray(v["originals"]) &&
-    Array.isArray(v["createdPartIDs"]) &&
+    Array.isArray(stretch) &&
+    stretch.every((id) => typeof id === "string") &&
+    Array.isArray(originals) &&
+    originals.every(isOriginalSnapshot) &&
+    Array.isArray(createdPartIDs) &&
+    createdPartIDs.every((id) => typeof id === "string") &&
     Array.isArray(v["plan"]) &&
     typeof v["distillate"] === "object" &&
     v["distillate"] !== null &&
@@ -301,7 +316,13 @@ export function pristineReconstruct(
   for (const trace of ordered) {
     if (!trace.ok) continue
     const created = new Set(trace.entry.createdPartIDs)
-    for (const { messageID, part } of trace.entry.originals) {
+    for (const original of trace.entry.originals) {
+      // Defensa en profundidad: una traza hueca construida en memoria
+      // (sin pasar por readTraces) jamás debe crashear el destructure.
+      if (!isOriginalSnapshot(original)) {
+        return { ok: false, reason: "corrupt-trace", message: `Corrupt trace: ${trace.file}` }
+      }
+      const { messageID, part } = original
       if (!wanted.has(messageID)) continue
       const parts = out.get(messageID) ?? []
       const idx = parts.findIndex((p) => p.id === part.id)

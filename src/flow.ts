@@ -113,30 +113,47 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 export function runDistillFlow(ports: FlowPorts): void {
   void (async () => {
-    const route = ports.currentRouteName()
-    if (route !== "session") {
-      ports.toast("info", "Open a session first")
-      return
-    }
-    const sessionID = ports.currentSessionID()
-    if (sessionID === undefined || sessionID === "") {
-      ports.toast("info", "Open a session first")
-      return
-    }
-    if (distillMutex.has(sessionID)) {
-      ports.toast("info", "A distillation is already running for this session")
-      return
-    }
-    distillMutex.add(sessionID)
     try {
-      await executeDistillFlow(ports, sessionID)
-    } finally {
-      distillMutex.delete(sessionID)
+      const route = ports.currentRouteName()
+      if (route !== "session") {
+        ports.toast("info", "Open a session first")
+        return
+      }
+      const sessionID = ports.currentSessionID()
+      if (sessionID === undefined || sessionID === "") {
+        ports.toast("info", "Open a session first")
+        return
+      }
+      if (distillMutex.has(sessionID)) {
+        ports.toast("info", "A distillation is already running for this session")
+        return
+      }
+      distillMutex.add(sessionID)
+      try {
+        await executeDistillFlow(ports, sessionID)
+      } finally {
+        distillMutex.delete(sessionID)
+      }
+    } catch {
+      ports.toast("error", "Distill failed — nothing was changed")
     }
   })()
 }
 
+function isSelectorAvailable(ports: FlowPorts): boolean {
+  return ports.selectAvailable !== false
+}
+
+const SAFE_MODE_CONFIRM_MESSAGE =
+  "DialogSelect is unavailable. Distill the current turn with all content types?"
+
 async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<void> {
+  const gateStatus = await resolveStatus(ports, sessionID)
+  if (isBusyStatus(gateStatus)) {
+    ports.toast("warning", "Session is busy — try again when it's idle")
+    return
+  }
+
   let stateMessages = ports.listStateMessages(sessionID)
   let serverMessages: readonly import("./ports.js").ServerMessage[] | undefined
 
@@ -144,7 +161,7 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
     try {
       const fetched = await ports.fetchServerMessages(sessionID, 50)
       serverMessages = fetched
-      if (fetched.length > 0) stateMessages = toAscending(fetched) as MessageLike[] as typeof stateMessages
+      if (fetched.length > 0) stateMessages = toAscending(fetched)
     } catch {
       // keep empty, will be handled below
     }
@@ -156,50 +173,60 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
   }
 
   const boundary = findCompactionBoundary(stateMessages)
-  const stretchOptions = buildStretchOptions(stateMessages, boundary)
-  const allStretchOptions = [...stretchOptions.presets, ...stretchOptions.rows]
 
-  const stretchSpec = await selectAsync(ports, "Select stretch to distill", allStretchOptions.map((o) => ({ title: o.title, value: o.value, description: o.description })), undefined)
-  if (stretchSpec === undefined) return
-
-  let finalSpec = stretchSpec
-  const isRowPick =
-    stretchSpec.kind === "range" &&
-    stretchOptions.rows.some(
-      (r) => r.value.kind === "range" && (r.value as { firstID: string }).firstID === (stretchSpec as { firstID: string }).firstID,
-    )
-  if (isRowPick) {
-    const lastRow = stretchOptions.rows[stretchOptions.rows.length - 1]
-    const endSpec = await selectAsync(
-      ports,
-      "Select end of stretch",
-      allStretchOptions.map((o) => ({ title: o.title, value: o.value, description: o.description })),
-      lastRow?.value,
-    )
-    if (endSpec === undefined) return
-    if (endSpec.kind === "range" && finalSpec.kind === "range") {
-      finalSpec = { kind: "range", firstID: (finalSpec as { firstID: string }).firstID, lastID: (endSpec as { firstID: string }).firstID }
-    } else {
-      finalSpec = endSpec
-    }
-  }
-
-  const typeOptions = buildTypeOptions()
-  const typeSelection = await selectAsync(ports, "Select content types", typeOptions.map((o) => ({ title: o.title, value: o.value })), undefined)
-  if (typeSelection === undefined) return
-
+  let finalSpec: import("./pure.js").StretchSpec
   let types: import("./pure.js").TypeFilter
-  if (typeof typeSelection === "object" && typeSelection !== null && "custom" in typeSelection && (typeSelection as { custom: boolean }).custom === true) {
-    const raw = await promptAsync(ports, "Content types", "e.g. text reasoning tool")
-    if (raw === undefined) return
-    const parsed = parseTypeSpec(raw)
-    if (typeof parsed === "object" && parsed !== null && "kind" in parsed && (parsed as { kind: string }).kind === "invalid") {
-      ports.toast("error", "Invalid content types — use: text, reasoning, tool")
-      return
-    }
-    types = parsed as import("./pure.js").TypeFilter
+  if (!isSelectorAvailable(ports)) {
+    const safeConfirmed = await confirmAsync(ports, "Distill current turn", SAFE_MODE_CONFIRM_MESSAGE)
+    if (!safeConfirmed) return
+    finalSpec = { kind: "current-turn" }
+    types = new Set(["text", "reasoning", "tool"])
   } else {
-    types = typeSelection as import("./pure.js").TypeFilter
+    const stretchOptions = buildStretchOptions(stateMessages, boundary)
+    const allStretchOptions = [...stretchOptions.presets, ...stretchOptions.rows]
+
+    const stretchSpec = await selectAsync(ports, "Select stretch to distill", allStretchOptions.map((o) => ({ title: o.title, value: o.value, description: o.description })), undefined)
+    if (stretchSpec === undefined) return
+
+    let pickedSpec = stretchSpec
+    const isRowPick =
+      stretchSpec.kind === "range" &&
+      stretchOptions.rows.some(
+        (r) => r.value.kind === "range" && (r.value as { firstID: string }).firstID === (stretchSpec as { firstID: string }).firstID,
+      )
+    if (isRowPick) {
+      const lastRow = stretchOptions.rows[stretchOptions.rows.length - 1]
+      const endSpec = await selectAsync(
+        ports,
+        "Select end of stretch",
+        allStretchOptions.map((o) => ({ title: o.title, value: o.value, description: o.description })),
+        lastRow?.value,
+      )
+      if (endSpec === undefined) return
+      if (endSpec.kind === "range" && pickedSpec.kind === "range") {
+        pickedSpec = { kind: "range", firstID: (pickedSpec as { firstID: string }).firstID, lastID: (endSpec as { firstID: string }).firstID }
+      } else {
+        pickedSpec = endSpec
+      }
+    }
+    finalSpec = pickedSpec
+
+    const typeOptions = buildTypeOptions()
+    const typeSelection = await selectAsync(ports, "Select content types", typeOptions.map((o) => ({ title: o.title, value: o.value })), undefined)
+    if (typeSelection === undefined) return
+
+    if (typeof typeSelection === "object" && typeSelection !== null && "custom" in typeSelection && (typeSelection as { custom: boolean }).custom === true) {
+      const raw = await promptAsync(ports, "Content types", "e.g. text reasoning tool")
+      if (raw === undefined) return
+      const parsed = parseTypeSpec(raw)
+      if (typeof parsed === "object" && parsed !== null && "kind" in parsed && (parsed as { kind: string }).kind === "invalid") {
+        ports.toast("error", "Invalid content types — use: text, reasoning, tool")
+        return
+      }
+      types = parsed as import("./pure.js").TypeFilter
+    } else {
+      types = typeSelection as import("./pure.js").TypeFilter
+    }
   }
 
   const validation = selectStretch(stateMessages, finalSpec, boundary, types)
@@ -284,7 +311,6 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
 
   let scratchSessionID: string | undefined
   let distillate: import("./pure.js").Distillate | undefined
-  let rawOutput: string | undefined
 
   try {
     scratchSessionID = await ports.createScratch(scratchDir, "distill-scratch")
@@ -294,21 +320,23 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
     const prompt = buildDistillPrompt(transcript, userRequest, budget, types)
 
     const result = await withTimeout(ports.promptScratch(scratchSessionID, scratchDir, prompt), 240_000)
-    rawOutput = result.text
     const model = result.model
 
-    const parsed = parseDistillOutput(rawOutput, stretchMessageIDs, budget)
+    const parsed = parseDistillOutput(result.text, stretchMessageIDs, budget)
     if (!parsed.ok) {
       ports.toast("error", "Distiller returned invalid output — nothing was changed")
       return
     }
     distillate = { ...parsed.distillate, model }
-  } catch {
-    if (rawOutput === undefined) {
-      ports.toast("error", "Distiller returned invalid output — nothing was changed")
-    } else {
-      ports.toast("error", "Distiller returned invalid output — nothing was changed")
-    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const timedOut = message.startsWith("Timeout after")
+    ports.toast(
+      "error",
+      timedOut
+        ? "Distiller timed out — nothing was changed"
+        : "Could not reach opencode server — nothing was changed",
+    )
     return
   } finally {
     if (scratchSessionID !== undefined) {
@@ -395,7 +423,7 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
       // keep empty
     }
   }
-  const effectiveMessages = currentMessages.length > 0 ? currentMessages : (currentServerMessages ? toAscending(currentServerMessages) as MessageLike[] as typeof currentMessages : currentMessages)
+  const effectiveMessages = currentMessages.length > 0 ? currentMessages : (currentServerMessages !== undefined ? toAscending(currentServerMessages) : currentMessages)
 
   if (effectiveMessages.length !== stateMessages.length) {
     ports.toast("warning", "The conversation changed during distillation — nothing was changed")
@@ -521,17 +549,21 @@ function corruptTitleOf(file: string): string {
 
 export function runRestoreFlow(ports: FlowPorts): void {
   void (async () => {
-    const route = ports.currentRouteName()
-    if (route !== "session") {
-      ports.toast("info", "Open a session first")
-      return
+    try {
+      const route = ports.currentRouteName()
+      if (route !== "session") {
+        ports.toast("info", "Open a session first")
+        return
+      }
+      const sessionID = ports.currentSessionID()
+      if (sessionID === undefined || sessionID === "") {
+        ports.toast("info", "Open a session first")
+        return
+      }
+      await executeRestoreFlow(ports, sessionID)
+    } catch {
+      ports.toast("error", "Restore failed — nothing was changed")
     }
-    const sessionID = ports.currentSessionID()
-    if (sessionID === undefined || sessionID === "") {
-      ports.toast("info", "Open a session first")
-      return
-    }
-    await executeRestoreFlow(ports, sessionID)
   })()
 }
 

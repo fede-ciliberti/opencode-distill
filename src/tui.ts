@@ -114,7 +114,9 @@ export function toSdkPart(part: PartLike): Part {
 // el flow aplica toAscending, así que devolvemos tal cual (el flow revierte).
 
 function adapt(api: TuiPluginApi): FlowPorts {
+  const selectAvailable = typeof api.ui.DialogSelect === "function"
   return {
+    selectAvailable,
     listStateMessages(sessionID) {
       const messages = api.state.session.messages(sessionID)
       return messages.map((msg) => ({
