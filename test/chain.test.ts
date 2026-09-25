@@ -239,19 +239,21 @@ describe("buildRestoreOps", () => {
     expect(res.ops.some((op) => op.messageID === "msg-c")).toBe(false)
   })
 
-  test("parte fuera del allowlist I4 → refuse (sin merge creativo)", () => {
-    const pristine = new Map(pristineOfBoth())
-    const bad: PartLike = {
-      id: "prt-a1",
-      sessionID: SES,
-      messageID: "msg-a",
-      type: "snapshot",
-      text: "x",
-    }
-    pristine.set("msg-a", [bad])
-    const res = buildRestoreOps(currentAfterT1T2(), pristine, ["msg-a", "msg-b"])
-    if (res.ok) throw new Error("expected refuse")
-    expect(res.reason).toBe("disallowed-part-type")
+  test("partes step-start/step-finish reales se SALTEAN (no refuse): ops solo mutables", () => {
+    const stepStart: PartLike = { id: "prt-ss", sessionID: SES, messageID: "msg-a", type: "step-start" }
+    const stepFinish: PartLike = { id: "prt-sf", sessionID: SES, messageID: "msg-a", type: "step-finish" }
+    const current = new Map<string, readonly PartLike[]>([
+      ["msg-a", [stepStart, stepFinish, textPart("msg-a", "prt-a1", "STUB alfa")]],
+      ["msg-b", [PRISTINE_B1]],
+    ])
+    const pristine = new Map<string, readonly PartLike[]>([
+      ["msg-a", [stepStart, stepFinish, PRISTINE_A1]],
+      ["msg-b", [PRISTINE_B1]],
+    ])
+    const res = buildRestoreOps(current, pristine, ["msg-a", "msg-b"])
+    if (!res.ok) throw new Error(`expected ok, got refuse: ${res.reason}`)
+    expect(res.ops.some((op) => op.kind === "update" && op.part.id === "prt-a1")).toBe(true)
+    expect(res.ops.some((op) => (op.kind === "update" ? op.part.id : op.partID).startsWith("prt-s"))).toBe(false)
   })
 
   test("pristine == current → cero ops", () => {

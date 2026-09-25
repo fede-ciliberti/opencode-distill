@@ -332,7 +332,9 @@ export type RestoreOpsResult = { ok: true; ops: readonly PartOp[] } | ChainError
  * Write-diff prístino-vs-actual dentro del stretch de T (I5): prístino
  * ausente/cambiado en actual → update (spread del original verbatim);
  * actual sin prístino → delete. Orden UPDATEs→DELETEs (crash-safety).
- * Allowlist I4 sobre lo emitido (solo text/reasoning/tool).
+ * Las partes fuera del allowlist I4 (step-start/step-finish/…) se SALTEAN
+ * en ambos loops: jamás generan ops. I4 defensivo sobre lo emitido
+ * (por construcción solo text/reasoning/tool).
  */
 export function buildRestoreOps(
   currentParts: ReadonlyMap<string, readonly PartLike[]>,
@@ -348,21 +350,26 @@ export function buildRestoreOps(
     const currentByID = new Map(current.map((p) => [p.id, p]))
     const wantByID = new Map(want.map((p) => [p.id, p]))
     for (const part of want) {
-      if (!MUTABLE_PART_TYPES.has(part.type)) {
-        return {
-          ok: false,
-          reason: "disallowed-part-type",
-          message: `Disallowed part type in restore: ${part.type}`,
-        }
-      }
+      if (!MUTABLE_PART_TYPES.has(part.type)) continue
       const cur = currentByID.get(part.id)
       if (cur === undefined || !samePartContent(cur, part)) {
         updates.push({ kind: "update", messageID, part: { ...part } })
       }
     }
     for (const part of current) {
+      if (!MUTABLE_PART_TYPES.has(part.type)) continue
       if (!wantByID.has(part.id)) {
         deletes.push({ kind: "delete", messageID, partID: part.id })
+      }
+    }
+  }
+  for (const op of [...updates, ...deletes]) {
+    const emittedType = op.kind === "update" ? op.part.type : currentParts.get(op.messageID)?.find((p) => p.id === op.partID)?.type
+    if (emittedType !== undefined && !MUTABLE_PART_TYPES.has(emittedType)) {
+      return {
+        ok: false,
+        reason: "disallowed-part-type",
+        message: `Disallowed part type in restore: ${emittedType}`,
       }
     }
   }

@@ -506,4 +506,37 @@ describe("runRestoreFlow", () => {
     ).toBe(true)
     expect(ports.selectCalls).toHaveLength(0)
   })
+
+  test("stretch con step-start/step-finish llega a EXECUTE (regression QA #20)", async () => {
+    const ports = new FakePorts()
+    const stepStart: PartLike = { id: "prt-ss", sessionID: SESSION, messageID: "a1", type: "step-start" }
+    const stepFinish: PartLike = { id: "prt-sf", sessionID: SESSION, messageID: "a1", type: "step-finish" }
+    const entry = makeEntry(
+      T1_TS,
+      ["a1"],
+      [{ messageID: "a1", part: textPart("p-a1", "a1", "original a1") }],
+      ["prt_distill_x"],
+      "done",
+    )
+    ports.readTracesDefault = [healthyTrace(T1_TS, entry, "done")]
+    ports.partsByMessageValue.set("a1", [
+      stepStart,
+      stepFinish,
+      { ...textPart("prt_distill_x", "a1", "distilled"), synthetic: true },
+    ])
+    ports.selectAuto = [0]
+    runRestoreFlow(ports)
+    await flush()
+    expect(
+      ports.toasts.some((t) => t.message === "Restore cannot proceed — nothing was changed"),
+    ).toBe(false)
+    expect(
+      ports.toasts.some(
+        (t) => t.variant === "success" && t.message === "Restore complete — original content is back",
+      ),
+    ).toBe(true)
+    expect(ports.updateCalls).toEqual([{ partID: "p-a1", messageID: "a1" }])
+    expect(ports.deleteCalls).toEqual([{ partID: "prt_distill_x", messageID: "a1" }])
+    expect(ports.appendStatusCalls).toEqual([{ ts: T1_TS, status: "restored" }])
+  })
 })
