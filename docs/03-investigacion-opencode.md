@@ -86,3 +86,25 @@ estrictos. Verificar por provider ([`04-preguntas-abiertas.md`](04-preguntas-abi
 - ⚠️ Orden de partes tras múltiples upserts (el projector ordena por `(message_id, id)`).
 - 🔍 Referencias históricas (PRs) vinieron de web search sobre clone shallow; no
   afectan el diseño.
+
+## 7. Forma medida de la compactación en 1.18.32 ✅ (smoke-compaction-boundary.ts, 2026-09-25)
+
+- ✅ `client.v2.session.compact({sessionID})` responde **503** `ServiceUnavailableError`
+  `"Session compact is not available yet"` en 1.18.32. **No es la vía operativa.**
+- ✅ La vía operativa es `client.session.summarize({sessionID, directory, providerID, modelID})`
+  (responde `200 true`) y escribe el mismo par documentado en §5:
+  - **Mensaje user** con **una sola parte** `type:"compaction"`. Forma medida exacta:
+    `{"id","sessionID","messageID","type":"compaction","auto":false}` —
+    **sin `tail_start_id`, sin `overflow`**. Corrección a §5: los campos
+    `overflow?`/`tail_start_id?` existen en el tipo `CompactionPart` del SDK
+    pero el summarize real **no los escribe**.
+  - **Mensaje assistant** con `summary:true` ✅, `mode:"compaction"`,
+    `agent:"compaction"`, `parentID` = id del mensaje user de compactación,
+    partes `[step-start, reasoning, text, step-finish]` (el `text` es el resumen).
+- ✅ **Storage intacto**: los 5 mensajes previos siguen presentes en
+  `session.messages` tras compactar (5/5). El filtrado es solo en lectura,
+  como dice §1 (`filterCompacted`).
+- ⚠️ `client.v2.session.context({sessionID})` devolvió `{"data":[]}` **incluso
+  antes de compactar** (sesión con 3 mensajes). No sirve como instrumento de
+  frontera en 1.18.32 — causa desconocida (¿scoping por directory/workspace,
+  proyección distinta?). No usar para I7.

@@ -135,3 +135,22 @@ narrativo (texto antes que tool), habría que lograrlo vía elección de los
 (sin invocar al modelo — litellm no responde bajo `--pure`, el prompt con
 modelo colgó 240 s). El orden es nivel storage (projector), independiente del
 rol; si hiciera falta, repetir sobre assistant cuando el provider responda.
+
+## 7. Frontera de compactación ✅ (smoke-compaction-boundary.ts, 2026-09-25)
+
+Corrida `PORT=4714 LOG=/tmp/opencode/distill-smoke-4.log scripts/run-smoke.sh scripts/smoke-compaction-boundary.ts`
+(exit 0; modelo `litellm/gpt-oss-20b` — el default `deepseek-v4-flash` no responde en este entorno):
+
+| Sonda | Resultado |
+|---|---|
+| `v2.session.compact` | `503 ServiceUnavailableError` "Session compact is not available yet" — **no operativo en 1.18.32** |
+| `session.summarize` (vía operativa) | `200 true`; escribe user+`compaction` / assistant+`summary` |
+| Parte `compaction` medida | `{"id","sessionID","messageID","type":"compaction","auto":false}` — **sin `tail_start_id`, sin `overflow`** |
+| `tail_start_id` legible | **NO** → rige el FALLBACK |
+| Mensajes previos en `session.messages` | 5/5 presentes → storage intacto ✅ |
+| Assistant con `summary:true` | 1 mensaje, `mode/agent:"compaction"`, `parentID` = msg de compactación ✅ |
+| `v2.session.context` | `{"data":[]}` antes y después — no usable como instrumento ⚠️ |
+
+**Regla de frontera I7 (FALLBACK, fijo)**: como `tail_start_id` no es legible,
+la frontera = **inicio de sesión** (todo stretch es válido). El stretch igual
+debe excluir mensajes con `summary:true` o partes `type:"compaction"`.
