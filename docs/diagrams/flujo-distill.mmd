@@ -1,0 +1,14 @@
+%% Diagrama: flujo de /distill — Fuente: docs/diagrams/flujo-distill.mmd
+flowchart TD
+    U["Usuario: /distill"] --> G{"Sesion idle?"}
+    G -- no --> R["Rechazo: busy o retry"]
+    G -- si --> S["Seleccion del tramo"]
+    S --> L["Lectura de mensajes y partes"]
+    L --> D["Destilado en scratch session"]
+    D --> P["Plan e invariantes"]
+    P --> V{"Plan valido?"}
+    V -- no --> A["Abort: cero writes"]
+    V -- si --> C["Confirmacion del usuario"]
+    C --> E["Ejecucion: UPDATEs y luego DELETEs"]
+    E --> T["Trace sidecar a disco"]
+    T --> OK["Toast: ahorro de tokens"]

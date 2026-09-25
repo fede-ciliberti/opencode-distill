@@ -1,0 +1,39 @@
+{
+  "name": "opencode-distill",
+  "version": "0.0.0",
+  "description": "OpenCode TUI plugin: destila tramos descarrilados de una sesión in-place (reescribe partes, no mensajes).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fede-ciliberti/opencode-distill.git"
+  },
+  "type": "module",
+  "exports": {
+    "./tui": {
+      "import": "./dist/tui.js",
+      "types": "./dist/tui.d.ts"
+    }
+  },
+  "engines": {
+    "opencode": ">=1.18.0"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "pretest": "npm run build",
+    "test": "bun test",
+    "prepack": "npm run build",
+    "smoke:part-update": "bun run scripts/smoke-part-update.ts",
+    "smoke:resend": "bun run scripts/smoke-resend.ts",
+    "smoke:reasoning-only": "bun run scripts/smoke-reasoning-only.ts",
+    "smoke:reasoning-tokens": "bun run scripts/smoke-reasoning-tokens.ts"
+  },
+  "keywords": ["opencode", "opencode-plugin", "opencode-tui", "tui"],
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.32",
+    "@opencode-ai/sdk": "1.18.32",
+    "typescript": "5.9.3",
+    "@types/bun": "1.3.2"
+  }
+}
