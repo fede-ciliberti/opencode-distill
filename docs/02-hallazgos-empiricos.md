@@ -268,3 +268,48 @@ y pasa) ni el flag `synthetic` solo (brazo e pasa).
    como `[1]: read el archivo…` (con corchetes) y `parseDistillOutput` lo
    rechaza (`Unparseable stub line`, 3/3 intentos idénticos). El destilador queda
    en `muse-spark-1.3-contributor`.
+
+## Cadena de trazas ✅ (smoke-chain.ts, 2026-09-25)
+
+Corrida `PORT=4717 LOG=/tmp/opencode/distill-smoke-18.log scripts/run-smoke.sh scripts/smoke-chain.ts`
+(exit 0; turnos con `SMOKE_MODEL` default `muse-spark-1.3-contributor`, destilador
+`SMOKE_DISTILL_MODEL` default igual; ambos configurables por env).
+Evidencia cruda: `.omo/evidence/task-18-distill-implementacion-completa.log`.
+One-time (Metis F10), no gate de regresión. Importa código real de `src/`
+(`snapshotForTrace`/`buildRewritePlan`/`simulatePlan`/`partHash`/`selectedChars`,
+`buildBudget`/`buildTranscript`/`buildDistillPrompt`/`parseDistillOutput`/`userRequestFor`,
+`appendPlanned`/`appendStatus`/`pristineReconstruct`/`buildRestoreOps`/`readTraces`) — jamás replica.
+
+Diseño: una sesión scratch con 5 turnos idénticos en forma (cada uno con tool
+call real `read` sobre un case-file distinto: QUASAR/NEBULA/PULSAR/MAGNETAR/BLAZAR;
+cada turno agrega 2 assistants, así que los stretches son de 6 mensajes).
+T1 = distill real de los turnos 1..3 (6 mensajes, `before=10209` chars, parse ok
+al intento 1, `simulatePlan` ok, EXECUTE, trace → done). T2 = distill real de
+los turnos 3..5 (solapa T1 en los 2 mensajes del turno 3) con input vía
+`pristineReconstruct`. Restore de T1 (la traza VIEJA) vía cadena real del
+journal. Re-distill de los 5 turnos (10 mensajes) con input vía cadena + execute
+real (trace T3 → done).
+
+| Assert | Resultado |
+|---|---|
+| ASSERT1 — el prompt de T2 contiene el PRÍSTINO del turno 3 (`PULSAR`) y NO los stubs de T1 | OK (transcript raw impreso en el log; 1 substring prístino + 2 stubs ausentes) |
+| ASSERT2 — restore de T1: read-back turnos 1..3 == prístino pre-T1 por `partHash` (9/9), creadas de T1 eliminadas (6/6), destilado de T2 ausente en el solape (2/2), stubs de T2 presentes en turnos 4..5 (4/4) | OK (read-backs raw impresos; `RESTORE-T1 ops=16`; trace T1 → `restored`) |
+| ASSERT3 — el re-distill de los 5 turnos contiene los 5 markers prístinos y NINGÚN texto previo (2 summaries + 12 stubs ausentes) | OK (transcript raw impreso; sin drift summary-of-summary) |
+
+**Consecuencias de diseño**:
+
+1. La cadena completa DEC-4 funciona end-to-end contra un server vivo con
+   solapamiento real: el input del destilador se reconstruye a prístino aunque
+   el stretch intersecte una traza previa (ASSERT1), el restore de una traza
+   vieja deja el solape en prístino sin tocar las porciones disjuntas de la
+   traza posterior (ASSERT2), y el re-distill posterior parte de prístino sin
+   acumular resúmenes de resúmenes (ASSERT3).
+2. El restore de T1 sobre el solape elimina el destilado de T2 en esos mensajes
+   (sus porciones disjuntas en turnos 4..5 siguen) — tal como prevé DEC-4.6:
+   coherente, no corrupto.
+3. Nota de método: cada turno del modelo agrega 2 assistants (no 1), así que
+   los stretches se definen por turnos (listas explícitas de IDs), no por
+   conteo de mensajes. Y `muse-spark` como modelo de turnos responde estable
+   con el patrón case-file de task #17; los intentos text-only fallaron
+   (refusals de seguridad, regla de idioma, budget < 25% por masa chica,
+   timeouts con filler largo).
