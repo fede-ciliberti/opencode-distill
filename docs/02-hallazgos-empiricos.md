@@ -107,3 +107,31 @@ tool↔preview) son implementables con `part.update`: el marcado
 `synthetic`+`metadata` persiste, sobrevive a re-toques de otros campos, y el
 `metadata.preview` se puede reescribir en consonancia con `state.output`
 (cierra el hallazgo §5: el preview solo va stale si NO se reescribe).
+
+## Orden de partes ✅
+
+Corrida `smoke-part-order.ts` (`PORT=4713 LOG=/tmp/opencode/distill-smoke-3.log scripts/run-smoke.sh scripts/smoke-part-order.ts`, exit 0):
+
+- **Sonda 1**: 3 upserts nuevos en un mismo mensaje, en orden de inserción
+  `prt_zeta_probe`, `prt_alfa_probe`, `prt_mm_probe` → el read-back vía
+  `session.messages` devuelve `prt_alfa_probe`, `prt_mm_probe`,
+  `prt_zeta_probe`. **El orden es por `id` ascendente, NO por inserción.**
+  Confirma la inferencia de `03-investigacion-opencode.md:86` (el projector
+  ordena por `(message_id, id)`).
+- **Sonda 2**: re-upsert de `prt_alfa_probe` cambiando solo `text` → su
+  posición no cambia (índice 1 antes y después). **Reescribir no reordena.**
+- **Sonda 3**: la parte pre-existente del server (`prt_0d86…`) queda en índice
+  0 y las nuevas después. Ojo: `prt_0d86… < prt_alfa…` lexicográficamente, así
+  que esta corrida no distingue "append después" de "id-asc global" — en la
+  práctica toda la lista observada es id-asc.
+
+**Implicancia de diseño**: el destilado NO puede depender del orden de
+inserción ni de la posición de las partes — el plan-builder de la task #7 ya
+está diseñado order-independent. Si alguna vez hiciera falta un orden
+narrativo (texto antes que tool), habría que lograrlo vía elección de los
+`partID` (prefijos que ordenen), no vía secuencia de writes.
+
+⚠️ Nota metodológica: medido sobre mensaje **user** vía `prompt({noReply:true})`
+(sin invocar al modelo — litellm no responde bajo `--pure`, el prompt con
+modelo colgó 240 s). El orden es nivel storage (projector), independiente del
+rol; si hiciera falta, repetir sobre assistant cuando el provider responda.

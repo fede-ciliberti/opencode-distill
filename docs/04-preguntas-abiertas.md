@@ -38,8 +38,11 @@
   cierra la puerta del todo.
 - **Cómo cerrar**: inyectar una parte con `metadata` de tamaño marcado y medir tokens.
 
-## Q6 — Orden de partes tras múltiples upserts
+## Q6 — Orden de partes tras múltiples upserts ✅ CERRADA
 
-- **Por qué importa**: si el destilado depende del orden (texto antes que tool), hay
-  que confirmar que el orden leído post-write es el esperado.
-- **Cómo cerrar**: upsert de varias partes en un mensaje y leer el orden resultante.
+- **Hallazgo**: el read-back ordena por `id` ascendente, no por inserción
+  (`smoke-part-order.ts`: inserción zeta,alfa,mm → lectura alfa,mm,zeta).
+  Reescribir una parte no mueve su posición. Ver `02-hallazgos-empiricos.md`
+  "Orden de partes".
+- **Implicancia**: el destilado no puede depender del orden de inserción; el
+  plan-builder (task #7) es order-independent por diseño.
