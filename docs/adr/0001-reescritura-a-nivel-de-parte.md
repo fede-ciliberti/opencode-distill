@@ -16,10 +16,10 @@ Reescribir las **partes** mutables (`text`, `reasoning`, `tool.state.output`) de
 
 ## Opciones consideradas
 
-- **Borrar mensajes del medio + inyectar el destilado** — rechazada: destruye contabilidad y reversibilidad; el delete de mensajes del medio no está verificado.
-- **Dos capas (historial canónico + proyección mutable)** — rechazada para un plugin: requiere tocar el core (`filterCompacted`); no hay primitiva de *swap* de contexto accesible.
-- **Tombstone in-band** (metadata o partes "ocultas") — rechazada: paga tokens en cada turno o depende de serialización de `metadata` no verificada.
-- **`/compact` global y fork** — rechazadas por definición del problema.
+- **Borrar mensajes del medio + inyectar el destilado**, rechazada: destruye contabilidad y reversibilidad; el delete de mensajes del medio no está verificado.
+- **Dos capas (historial canónico + proyección mutable)**, rechazada para un plugin: requiere tocar el core (`filterCompacted`); no hay primitiva de *swap* de contexto accesible.
+- **Tombstone in-band** (metadata o partes "ocultas"), rechazada: paga tokens en cada turno o depende de serialización de `metadata` no verificada.
+- **`/compact` global y fork**, rechazadas por definición del problema.
 
 ## Consecuencias
 

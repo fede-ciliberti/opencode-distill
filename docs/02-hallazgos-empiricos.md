@@ -1,4 +1,4 @@
-# Hallazgos empíricos — primitivas de reescritura
+# Hallazgos empíricos, primitivas de reescritura
 
 > ✅ = verificado contra un server vivo. ⚠️ = supuesto o no verificado.
 > Todo lo de este doc se probó con los scripts de [`scripts/`](../scripts/) contra
@@ -55,7 +55,7 @@ inyectar una parte hay que apuntar a un `messageID` existente.
 **Conductual** (`smoke-part-update.ts`): inyectar `"The launch code is BANANA-77"`
 en una parte → el modelo respondió `BANANA-77` en el turno siguiente.
 
-**Objetivo — delta de tokens de input** (`smoke-reasoning-tokens.ts`): tres
+**Objetivo, delta de tokens de input** (`smoke-reasoning-tokens.ts`): tres
 sesiones idénticas, cada una con una parte inyectada distinta; se mide
 `step-finish.tokens.input` del turno siguiente:
 
@@ -69,7 +69,7 @@ El control positivo (C) valida el instrumento. **El `reasoning` también se
 reenvía al contexto** (no es solo display).
 
 ⚠️ **Lección metodológica**: un test conductual aislado (`smoke-reasoning-only.ts`)
-dio "dropped" — el modelo respondió *"There's no magic word"* cuando el secreto
+dio "dropped", el modelo respondió *"There's no magic word"* cuando el secreto
 estaba en el `reasoning`. Era un **refusal**, no ausencia de contexto: el
 instrumento de tokens lo desmintió. **Para verificar contexto se mide tokens, no
 se le pregunta al modelo.**
@@ -91,7 +91,7 @@ incoherencia visible: hay que reescribir también el preview o removerlo.
 
 Corrida `smoke-metadata.ts` (server aislado `--pure`, OpenCode 1.18.32, SDK v2).
 Diseño sin-modelo: el mensaje contenedor se crea con `prompt(noReply:true)` y la
-tool part de la sonda B se siembra por upsert — las 4 sondas preguntan por
+tool part de la sonda B se siembra por upsert, las 4 sondas preguntan por
 **persistencia en el store** (read-back vía `session.messages`), no por
 comportamiento del LLM.
 
@@ -122,34 +122,34 @@ Corrida `smoke-part-order.ts` (`PORT=4713 LOG=/tmp/opencode/distill-smoke-3.log 
   posición no cambia (índice 1 antes y después). **Reescribir no reordena.**
 - **Sonda 3**: la parte pre-existente del server (`prt_0d86…`) queda en índice
   0 y las nuevas después. Ojo: `prt_0d86… < prt_alfa…` lexicográficamente, así
-  que esta corrida no distingue "append después" de "id-asc global" — en la
+  que esta corrida no distingue "append después" de "id-asc global", en la
   práctica toda la lista observada es id-asc.
 
 **Implicancia de diseño**: el destilado NO puede depender del orden de
-inserción ni de la posición de las partes — el plan-builder de la task #7 ya
+inserción ni de la posición de las partes, el plan-builder de la task #7 ya
 está diseñado order-independent. Si alguna vez hiciera falta un orden
 narrativo (texto antes que tool), habría que lograrlo vía elección de los
 `partID` (prefijos que ordenen), no vía secuencia de writes.
 
 ⚠️ Nota metodológica: medido sobre mensaje **user** vía `prompt({noReply:true})`
-(sin invocar al modelo — litellm no responde bajo `--pure`, el prompt con
+(sin invocar al modelo, litellm no responde bajo `--pure`, el prompt con
 modelo colgó 240 s). El orden es nivel storage (projector), independiente del
 rol; si hiciera falta, repetir sobre assistant cuando el provider responda.
 
 ## 7. Frontera de compactación ✅ (smoke-compaction-boundary.ts, 2026-09-25)
 
 Corrida `PORT=4714 LOG=/tmp/opencode/distill-smoke-4.log scripts/run-smoke.sh scripts/smoke-compaction-boundary.ts`
-(exit 0; modelo `litellm/gpt-oss-20b` — el default `deepseek-v4-flash` no responde en este entorno):
+(exit 0; modelo `litellm/gpt-oss-20b`, el default `deepseek-v4-flash` no responde en este entorno):
 
 | Sonda | Resultado |
 |---|---|
-| `v2.session.compact` | `503 ServiceUnavailableError` "Session compact is not available yet" — **no operativo en 1.18.32** |
+| `v2.session.compact` | `503 ServiceUnavailableError` "Session compact is not available yet", **no operativo en 1.18.32** |
 | `session.summarize` (vía operativa) | `200 true`; escribe user+`compaction` / assistant+`summary` |
-| Parte `compaction` medida | `{"id","sessionID","messageID","type":"compaction","auto":false}` — **sin `tail_start_id`, sin `overflow`** |
+| Parte `compaction` medida | `{"id","sessionID","messageID","type":"compaction","auto":false}`, **sin `tail_start_id`, sin `overflow`** |
 | `tail_start_id` legible | **NO** → rige el FALLBACK |
 | Mensajes previos en `session.messages` | 5/5 presentes → storage intacto ✅ |
 | Assistant con `summary:true` | 1 mensaje, `mode/agent:"compaction"`, `parentID` = msg de compactación ✅ |
-| `v2.session.context` | `{"data":[]}` antes y después — no usable como instrumento ⚠️ |
+| `v2.session.context` | `{"data":[]}` antes y después, no usable como instrumento ⚠️ |
 
 **Regla de frontera I7 (FALLBACK, fijo)**: como `tail_start_id` no es legible,
 la frontera = **inicio de sesión** (todo stretch es válido). El stretch igual
@@ -177,7 +177,7 @@ tiene que ser **client-side** (`session.status` antes de EXECUTE + re-check
 pre-EXECUTE, como ya prevé el flow del todo 14). El server no te protege de
 pisar un turno en curso; un write en busy puede corromper el tramo que el modelo
 está generando. Para `mapUpdateError` (todo 14): no existe rama busy por
-status/error-body — busy se detecta por `session.status`, no por el error del write.
+status/error-body, busy se detecta por `session.status`, no por el error del write.
 
 Notas de método: `prompt` bloquea hasta el fin del turno (no sirve para busy);
 hay que usar `promptAsync` (`204` inmediato). `session.status` devuelve un mapa
@@ -188,14 +188,14 @@ Timeouts usados: setup-turn 240 s, waitForIdle 240 s, cleanup-idle 30 s.
 
 Corrida `SMOKE_MODEL=gpt-oss-20b SMOKE_DISTILL_MODEL=muse-spark-1.3-contributor PORT=4716 LOG=/tmp/opencode/distill-smoke-17c.log scripts/run-smoke.sh scripts/smoke-distill-e2e.ts`
 (exit 0; el default `deepseek-v4-flash` no responde en este entorno; `gpt-oss-20b`
-no parsea el formato del destilador —ver nota—, así que destila `muse-spark`).
+no parsea el formato del destilador ,ver nota,, así que destila `muse-spark`).
 El modelo es configurable: `SMOKE_MODEL` (turnos + comparación) y
 `SMOKE_DISTILL_MODEL` (scratch del destilador), ambos default `muse-spark-1.3-contributor`.
 Evidencia cruda: `.omo/evidence/task-17-distill-implementacion-completa.log`.
 One-time (Metis F10), no gate de regresión. Importa código real de `src/`
 (`selectStretch`/`snapshotForTrace`/`buildRewritePlan`/`simulatePlan`/`partHash`/`selectedChars`,
 `buildBudget`/`buildTranscript`/`buildDistillPrompt`/`parseDistillOutput`/`userRequestFor`/`estTokens`,
-`appendPlanned`/`pristineReconstruct`/`buildRestoreOps`) — jamás replica.
+`appendPlanned`/`pristineReconstruct`/`buildRestoreOps`), jamás replica.
 
 Diseño: dos twins en scratch dirs separados con 3 turnos idénticos (cada uno con
 tool call real `read` sobre un case-file distinto: FLAMMABLE/MAGNETIC/VOLCANIC).
@@ -203,7 +203,7 @@ Twin A = control (sin destilar) + turno de comparación (`tokens.input` = 35686)
 Twin B = `selectStretch(current-turn)` → 2 mensajes del último turno →
 snapshot (3 originales + `partHash` por parte) → scratch prompt real
 (parse ok al intento 1) → plan (5 ops: distillate + stub + tool-update, 2 deletes;
-`before=3429` chars → `after=406`, break-even 1) → `simulatePlan` ok (I1–I8) →
+`before=3429` chars → `after=406`, break-even 1) → `simulatePlan` ok (I1,I8) →
 EXECUTE manual (`part.update` → `part.delete`) → VERIFY por read-back →
 intento de turno de comparación → RESTORE por cadena real del journal.
 
@@ -216,7 +216,7 @@ intento de turno de comparación → RESTORE por cadena real del journal.
 
 ⚠️ **Medición NO-COMPARABLE (finding, no aborta)**: el turno de comparación
 post-distill falla con `UnknownError` "Invalid prompt: The messages do not match
-the ModelMessage[] schema" (assistant vacío, 12 reintentos × 5 s) — con
+the ModelMessage[] schema" (assistant vacío, 12 reintentos × 5 s), con
 `muse-spark-1.3-contributor` Y con `gpt-oss-20b` (el rechazo es independiente del
 modelo; ver causa abajo). El Δ A−B no es medible en este entorno
 (`tokensA=35686`, `tokensBpre=35179`, ahorro `2992` chars ≈ `748` tokens
@@ -258,13 +258,13 @@ y pasa) ni el flag `synthetic` solo (brazo e pasa).
    marcar procedencia sin `metadata` (p. ej. prefijo textual `[distilled …]` en
    el `text`, ya presente en el tool-stub), (b) verificar si el rechazo es
    específico de LiteLLM/proxy vs OpenCode projector, (c) medir con un provider
-   que tolere metadata. Decisión pendiente — tasks #18-20 no deberían asumir que
+   que tolere metadata. Decisión pendiente, tasks #18-20 no deberían asumir que
    el tramo destilado es conversable.
 3. `buildRestoreOps` opera sobre partes mutables (`text`/`reasoning`/`tool`):
    pasarle el mapa completo (con `step-start`/`step-finish`) refusea con
    `disallowed-part-type`. El flow filtra antes de llamar (el smoke lo hace
    explícito en `mutableOnly`).
-4. Nota de modelo: `gpt-oss-20b` como destilador NO sirve — devuelve los stubs
+4. Nota de modelo: `gpt-oss-20b` como destilador NO sirve, devuelve los stubs
    como `[1]: read el archivo…` (con corchetes) y `parseDistillOutput` lo
    rechaza (`Unparseable stub line`, 3/3 intentos idénticos). El destilador queda
    en `muse-spark-1.3-contributor`.
@@ -278,7 +278,7 @@ Evidencia cruda: `.omo/evidence/task-18-distill-implementacion-completa.log`.
 One-time (Metis F10), no gate de regresión. Importa código real de `src/`
 (`snapshotForTrace`/`buildRewritePlan`/`simulatePlan`/`partHash`/`selectedChars`,
 `buildBudget`/`buildTranscript`/`buildDistillPrompt`/`parseDistillOutput`/`userRequestFor`,
-`appendPlanned`/`appendStatus`/`pristineReconstruct`/`buildRestoreOps`/`readTraces`) — jamás replica.
+`appendPlanned`/`appendStatus`/`pristineReconstruct`/`buildRestoreOps`/`readTraces`), jamás replica.
 
 Diseño: una sesión scratch con 5 turnos idénticos en forma (cada uno con tool
 call real `read` sobre un case-file distinto: QUASAR/NEBULA/PULSAR/MAGNETAR/BLAZAR;
@@ -292,9 +292,9 @@ real (trace T3 → done).
 
 | Assert | Resultado |
 |---|---|
-| ASSERT1 — el prompt de T2 contiene el PRÍSTINO del turno 3 (`PULSAR`) y NO los stubs de T1 | OK (transcript raw impreso en el log; 1 substring prístino + 2 stubs ausentes) |
-| ASSERT2 — restore de T1: read-back turnos 1..3 == prístino pre-T1 por `partHash` (9/9), creadas de T1 eliminadas (6/6), destilado de T2 ausente en el solape (2/2), stubs de T2 presentes en turnos 4..5 (4/4) | OK (read-backs raw impresos; `RESTORE-T1 ops=16`; trace T1 → `restored`) |
-| ASSERT3 — el re-distill de los 5 turnos contiene los 5 markers prístinos y NINGÚN texto previo (2 summaries + 12 stubs ausentes) | OK (transcript raw impreso; sin drift summary-of-summary) |
+| ASSERT1, el prompt de T2 contiene el PRÍSTINO del turno 3 (`PULSAR`) y NO los stubs de T1 | OK (transcript raw impreso en el log; 1 substring prístino + 2 stubs ausentes) |
+| ASSERT2, restore de T1: read-back turnos 1..3 == prístino pre-T1 por `partHash` (9/9), creadas de T1 eliminadas (6/6), destilado de T2 ausente en el solape (2/2), stubs de T2 presentes en turnos 4..5 (4/4) | OK (read-backs raw impresos; `RESTORE-T1 ops=16`; trace T1 → `restored`) |
+| ASSERT3, el re-distill de los 5 turnos contiene los 5 markers prístinos y NINGÚN texto previo (2 summaries + 12 stubs ausentes) | OK (transcript raw impreso; sin drift summary-of-summary) |
 
 **Consecuencias de diseño**:
 
@@ -305,7 +305,7 @@ real (trace T3 → done).
    traza posterior (ASSERT2), y el re-distill posterior parte de prístino sin
    acumular resúmenes de resúmenes (ASSERT3).
 2. El restore de T1 sobre el solape elimina el destilado de T2 en esos mensajes
-   (sus porciones disjuntas en turnos 4..5 siguen) — tal como prevé DEC-4.6:
+   (sus porciones disjuntas en turnos 4..5 siguen), tal como prevé DEC-4.6:
    coherente, no corrupto.
 3. Nota de método: cada turno del modelo agrega 2 assistants (no 1), así que
    los stretches se definen por turnos (listas explícitas de IDs), no por

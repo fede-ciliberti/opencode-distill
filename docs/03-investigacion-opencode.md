@@ -1,4 +1,4 @@
-# Investigación — cómo OpenCode arma el contexto
+# Investigación, cómo OpenCode arma el contexto
 
 > 🔍 = hallazgo de investigación (source externo, vía subagentes librarian).
 > ⚠️ = inferencia o punto no verificado localmente.
@@ -39,13 +39,13 @@ El conversor ramifica solo sobre un subconjunto; **el resto se dropea en silenci
 | Parte | user | assistant |
 |---|---|---|
 | `text` | incluida si no vacía | incluida |
-| `reasoning` | — | conservado **solo si es del mismo modelo**; si no, degradado a `text` |
-| `tool` | — | `completed`→`output-available`, `error`→`output-error` |
+| `reasoning` |, | conservado **solo si es del mismo modelo**; si no, degradado a `text` |
+| `tool` |, | `completed`→`output-available`, `error`→`output-error` |
 | `file` | incluida (salvo text/plain) | dropeada |
-| `step-start` | — | emitida; mensajes con solo `step-start` se filtran |
-| `step-finish`, `snapshot`, `patch`, `agent`, `retry` | — | **dropeadas** |
-| `compaction` | inyectada como texto `"What did we do so far?"` | — |
-| `subtask` | inyectada como texto | — |
+| `step-start` |, | emitida; mensajes con solo `step-start` se filtran |
+| `step-finish`, `snapshot`, `patch`, `agent`, `retry` |, | **dropeadas** |
+| `compaction` | inyectada como texto `"What did we do so far?"` |, |
+| `subtask` | inyectada como texto |, |
 
 ⚠️ Inferencia fuerte: los tipos internos (`step-*`, `snapshot`, `patch`) no se
 serializan al proveedor. Irrelevante para la seguridad del diseño: el allowlist los
@@ -70,7 +70,7 @@ estrictos. Verificar por provider ([`04-preguntas-abiertas.md`](04-preguntas-abi
   (`auto`, `overflow?`, `tail_start_id?`) y un assistant con `summary:true`. Los
   mensajes viejos no se borran (se filtran en lectura). `prune` marca
   `part.state.time.compacted` en outputs viejos de tools.
-- **Revert V1** (`revert.ts`): no borra al revertir — **stagea** un registro y
+- **Revert V1** (`revert.ts`): no borra al revertir, **stagea** un registro y
   restaura snapshot. El borrado real (`cleanup`) corre antes del próximo prompt.
 - **Revert V2**: `stage` / `clear` / `commit`; el projector borra filas con
   `seq > boundary`.
@@ -94,7 +94,7 @@ estrictos. Verificar por provider ([`04-preguntas-abiertas.md`](04-preguntas-abi
 - ✅ La vía operativa es `client.session.summarize({sessionID, directory, providerID, modelID})`
   (responde `200 true`) y escribe el mismo par documentado en §5:
   - **Mensaje user** con **una sola parte** `type:"compaction"`. Forma medida exacta:
-    `{"id","sessionID","messageID","type":"compaction","auto":false}` —
+    `{"id","sessionID","messageID","type":"compaction","auto":false}` ,
     **sin `tail_start_id`, sin `overflow`**. Corrección a §5: los campos
     `overflow?`/`tail_start_id?` existen en el tipo `CompactionPart` del SDK
     pero el summarize real **no los escribe**.
@@ -106,5 +106,5 @@ estrictos. Verificar por provider ([`04-preguntas-abiertas.md`](04-preguntas-abi
   como dice §1 (`filterCompacted`).
 - ⚠️ `client.v2.session.context({sessionID})` devolvió `{"data":[]}` **incluso
   antes de compactar** (sesión con 3 mensajes). No sirve como instrumento de
-  frontera en 1.18.32 — causa desconocida (¿scoping por directory/workspace,
+  frontera en 1.18.32, causa desconocida (¿scoping por directory/workspace,
   proyección distinta?). No usar para I7.

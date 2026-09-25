@@ -1,14 +1,38 @@
-%% Diagrama: flujo de /distill — Fuente: docs/diagrams/flujo-distill.mmd
+%% Diagrama: flujo de /distill y /distill-restore con cadena de trazas, Fuente: docs/diagrams/flujo-distill.mmd
 flowchart TD
     U["Usuario: /distill"] --> G{"Sesion idle?"}
     G -- no --> R["Rechazo: busy o retry"]
-    G -- si --> S["Seleccion del tramo"]
-    S --> L["Lectura de mensajes y partes"]
-    L --> D["Destilado en scratch session"]
-    D --> P["Plan e invariantes"]
+    G -- si --> S["Seleccion: timeline por mensaje + tipos"]
+    S --> L["LOAD: mensajes y partes"]
+    L --> PR["pristineReconstruct: inversion reverse-crono de trazas intersectantes"]
+    PR --> COR{"Traza corrupta intersecta el stretch?"}
+    COR -- si --> REF["Refuse: A distill trace is corrupted"]
+    COR -- no --> D["DISTILL: scratch session con transcript filtrado por tipos"]
+    D --> P["PLAN: UPDATEs luego DELETEs + I1-I8 en simulacion"]
     P --> V{"Plan valido?"}
     V -- no --> A["Abort: cero writes"]
-    V -- si --> C["Confirmacion del usuario"]
-    C --> E["Ejecucion: UPDATEs y luego DELETEs"]
-    E --> T["Trace sidecar a disco"]
-    T --> OK["Toast: ahorro de tokens"]
+    V -- si --> C["CONFIRM: rango + breakdown por tipo + estimates"]
+    C --> RV{"RE-VALID: hash por parte + busy re-check"}
+    RV -- drift o busy --> AB["Abort: sin writes"]
+    RV -- ok --> EX["EXECUTE: UPDATEs luego DELETEs"]
+    EX --> T["TRACE: JSONL append-only: planned luego done o partial"]
+    T --> OK["REPORT: toast ahorro estimate"]
+
+    UR["Usuario: /distill-restore"] --> GR{"Sesion idle?"}
+    GR -- no --> RR["Rechazo: busy"]
+    GR -- si --> LR["READ: trazas JSONL por session"]
+    LR --> SEL["SELECTOR: lista de trazas con corruptas disabled"]
+    SEL --> AC{"Todas corruptas?"}
+    AC -- si --> NTR["All distill traces are corrupted"]
+    AC -- no --> CC["CONFIRM restore"]
+    CC --> RVR{"RE-VALID: busy + re-read trazas"}
+    RVR -- busy o missing --> RAB["Abort: Trace not found"]
+    RVR -- ok --> RPR["pristine diff: pristineReconstruct del stretch de T vs estado actual"]
+    RPR --> RCOR{"Corrupta intersecta?"}
+    RCOR -- si --> RREF["Refuse: restore unavailable for this stretch"]
+    RCOR -- no --> RDIFF["buildRestoreOps: write-diff pristino vs actual"]
+    RDIFF --> REX["EXECUTE restore: UPDATEs luego DELETEs idempotentes"]
+    REX --> ROK["Append restored + toast: original content is back"]
+
+    EX -. "solapa futuro re-distill: input pristino" .-> RPR
+    REX -. "restore invalida solape de trazas posteriores" .-> PR
