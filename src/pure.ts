@@ -322,3 +322,172 @@ export function selectStretch(
   }
   return { ok: true, messageIDs }
 }
+
+// Plan builder: RewritePlan UPDATE→DELETE con IDs deterministas y modos por tipo (task #7, DEC-5).
+// NOTA: `traceRef = hash8(stretch)` porque el builder no recibe el ts del trace;
+// el flow lo reescribe al nombre real del archivo al persistir (task #11/#14).
+
+export type PlanErrorKind = "allowlist-violation"
+
+export class PlanError extends Error {
+  readonly kind: PlanErrorKind
+  constructor(kind: PlanErrorKind, message: string) {
+    super(message)
+    this.name = "PlanError"
+    this.kind = kind
+  }
+}
+
+/** FNV-1a-32 sobre UTF-8 → 8 hex lowercase. Implementación propia, sin deps. */
+export function hash8(messageIDs: readonly string[]): string {
+  const bytes = new TextEncoder().encode(messageIDs.join("\n"))
+  let h = 0x811c9dc5
+  for (const b of bytes) {
+    h ^= b
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return h.toString(16).padStart(8, "0")
+}
+
+function toolNameOf(part: PartLike): string {
+  if ("tool" in part) {
+    const withTool: { tool?: unknown } = part
+    if (typeof withTool.tool === "string" && withTool.tool !== "") {
+      return withTool.tool
+    }
+  }
+  return "tool"
+}
+
+function isCreatedPartID(id: string): boolean {
+  return id.startsWith("prt_distill_") || id.startsWith("prt_stub_")
+}
+
+/**
+ * Construye el RewritePlan UPDATE→DELETE (diseño §6 paso 6, DEC-5).
+ * UPSERTs primero (distillate + stubs + tool updates), DELETEs después.
+ * Throw tipado `PlanError` ante tipo fuera del allowlist I4 (contra el tipo fetch-eado).
+ */
+export function buildRewritePlan(
+  stretch: Stretch,
+  parts: readonly PartLike[],
+  distillate: Pick<Distillate, "summary" | "stubs">,
+  types: TypeFilter,
+): RewritePlan {
+  const firstID = stretch.messageIDs[0]
+  const inStretch = new Set<string>(stretch.messageIDs)
+  const inside = parts.filter((p) => inStretch.has(p.messageID))
+
+  for (const part of inside) {
+    if (part.type !== "text" && part.type !== "reasoning" && part.type !== "tool") {
+      throw new PlanError(
+        "allowlist-violation",
+        `Part ${part.id} has disallowed type "${part.type}" (allowlist: text/reasoning/tool)`,
+      )
+    }
+  }
+
+  if (firstID === undefined) {
+    return {
+      stretch,
+      ops: [],
+      mass: { beforeChars: 0, afterChars: 0, cacheInvalidationFrom: "", estBreakEvenTurns: 1 },
+    }
+  }
+
+  const h = hash8(stretch.messageIDs)
+  const wantText = types.has("text")
+  const wantReasoning = types.has("reasoning")
+  const wantTool = types.has("tool")
+
+  const textsToDelete = wantText
+    ? inside.filter(
+        (p) => p.type === "text" && (p.text ?? "") !== "" && !isCreatedPartID(p.id),
+      )
+    : []
+  const deletedTextByMessage = new Set<string>(textsToDelete.map((p) => p.messageID))
+  const reasoningsToDelete = wantReasoning ? inside.filter((p) => p.type === "reasoning") : []
+  const toolsToUpdate = wantTool
+    ? inside.filter(
+        (p) =>
+          p.type === "tool" &&
+          p.state?.status !== undefined &&
+          TOOL_DONE_STATUSES.has(p.state.status),
+      )
+    : []
+
+  const updates: Array<Extract<PartOp, { kind: "update" }>> = []
+  updates.push({
+    kind: "update",
+    messageID: firstID,
+    part: {
+      id: `prt_distill_${h}`,
+      sessionID: stretch.sessionID,
+      messageID: firstID,
+      type: "text",
+      text: distillate.summary,
+      synthetic: true,
+      metadata: { distilled: true, traceRef: h, types: [...types] },
+    },
+  })
+
+  for (const messageID of stretch.messageIDs.slice(1)) {
+    if (!deletedTextByMessage.has(messageID)) continue
+    const stub = distillate.stubs[messageID]
+    if (stub === undefined || stub === "") continue
+    updates.push({
+      kind: "update",
+      messageID,
+      part: {
+        id: `prt_stub_${messageID}`,
+        sessionID: stretch.sessionID,
+        messageID,
+        type: "text",
+        text: stub,
+        synthetic: true,
+        metadata: { stub: true, traceRef: h },
+      },
+    })
+  }
+
+  for (const original of toolsToUpdate) {
+    const label = `[distilled] ${toolNameOf(original)} — see distillate`
+    updates.push({
+      kind: "update",
+      messageID: original.messageID,
+      part: {
+        ...original,
+        state: { ...original.state, status: original.state?.status ?? "completed", output: label },
+        metadata: { ...original.metadata, preview: label },
+      },
+    })
+  }
+
+  const deleteIDs = new Set<string>([
+    ...textsToDelete.map((p) => p.id),
+    ...reasoningsToDelete.map((p) => p.id),
+  ])
+  const deletes: PartOp[] = []
+  for (const part of inside) {
+    if (deleteIDs.has(part.id)) {
+      deletes.push({ kind: "delete", messageID: part.messageID, partID: part.id })
+    }
+  }
+
+  const beforeChars = selectedChars(inside, types)
+  const stubChars = updates
+    .filter((o) => o.part.id.startsWith("prt_stub_"))
+    .reduce((acc, o) => acc + (o.part.text ?? "").length, 0)
+  const toolStubChars = updates
+    .filter((o) => !o.part.id.startsWith("prt_distill_") && !o.part.id.startsWith("prt_stub_"))
+    .reduce((acc, o) => acc + (o.part.state?.output ?? "").length, 0)
+  const afterChars = distillate.summary.length + stubChars + toolStubChars
+  const saving = beforeChars - afterChars
+  const estBreakEvenTurns = saving <= 0 ? 1 : Math.max(1, Math.ceil(afterChars / saving))
+
+  return {
+    stretch,
+    ops: [...updates, ...deletes],
+    mass: { beforeChars, afterChars, cacheInvalidationFrom: firstID, estBreakEvenTurns },
+  }
+}
