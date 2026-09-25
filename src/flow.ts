@@ -7,6 +7,7 @@ import {
   userRequestFor,
 } from "./distill.js"
 import {
+  buildRestoreOps,
   intersectingTraces,
   pristineReconstruct,
 } from "./journal.js"
@@ -15,6 +16,7 @@ import {
   buildConfirmMessage,
   buildEstimates,
   buildReportToast,
+  buildRestoreConfirmMessage,
   buildRewritePlan,
   buildStretchOptions,
   buildTypeBreakdown,
@@ -495,4 +497,162 @@ async function executeDistillFlow(ports: FlowPorts, sessionID: string): Promise<
 
   ports.appendStatus(sessionID, ts, "done", ports.now())
   ports.toast("success", buildReportToast(stretchMessageIDs.length, beforeChars, afterChars))
+}
+
+// --- Restore flow con selector de trazas (task #15, DEC-4.3/.5 + D4). ---
+// Orden: GATE → READ → SELECT → CONFIRM → RE-VALID → PRISTINE GUARD → EXECUTE → REPORT.
+// Las corruptas se listan DISABLED (sentinel, jamás matchea un ts real) y no son
+// seleccionables; intersectingTraces trata toda corrupta como intersectante
+// (fail-closed), así que pristineReconstruct refusea si alguna la toca.
+
+const CORRUPT_OPTION_VALUE = -1
+
+function formatRestoreTitle(ts: number, nMessages: number, status: string): string {
+  const d = new Date(ts)
+  const pad = (n: number): string => String(n).padStart(2, "0")
+  const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  return `${date} — ${nMessages} messages (${status})`
+}
+
+function corruptTitleOf(file: string): string {
+  const base = file.split("/").pop() ?? file
+  return `${base} (corrupt)`
+}
+
+export function runRestoreFlow(ports: FlowPorts): void {
+  void (async () => {
+    const route = ports.currentRouteName()
+    if (route !== "session") {
+      ports.toast("info", "Open a session first")
+      return
+    }
+    const sessionID = ports.currentSessionID()
+    if (sessionID === undefined || sessionID === "") {
+      ports.toast("info", "Open a session first")
+      return
+    }
+    await executeRestoreFlow(ports, sessionID)
+  })()
+}
+
+async function executeRestoreFlow(ports: FlowPorts, sessionID: string): Promise<void> {
+  const gateStatus = await resolveStatus(ports, sessionID)
+  if (isBusyStatus(gateStatus)) {
+    ports.toast("warning", "Session is busy — try again when it's idle")
+    return
+  }
+
+  const firstRead = ports.readTraces(sessionID)
+  if (!firstRead.ok) {
+    ports.toast("error", "Could not read distill traces")
+    return
+  }
+  const traces = firstRead.traces
+  if (traces.length === 0) {
+    ports.toast("info", "No distill traces for this session")
+    return
+  }
+  if (!traces.some((t) => t.ok)) {
+    ports.toast("warning", "All distill traces are corrupted — restore unavailable")
+    return
+  }
+
+  const options = traces.map((trace) => {
+    if (!trace.ok) {
+      return { title: corruptTitleOf(trace.file), description: undefined, value: CORRUPT_OPTION_VALUE }
+    }
+    return {
+      title: formatRestoreTitle(trace.ts, trace.entry.stretch.length, trace.status),
+      description: [...trace.entry.stretch].join(", "),
+      value: trace.ts,
+    }
+  })
+  const latestHealthy = traces.find((t) => t.ok)
+  const latestTs = latestHealthy !== undefined && latestHealthy.ok ? latestHealthy.ts : undefined
+
+  const selectedTs = await selectAsync(ports, "Select trace to restore", options, latestTs)
+  if (selectedTs === undefined) return
+
+  const chosenFirst = traces.find((t) => t.ok && t.ts === selectedTs)
+  if (chosenFirst === undefined || !chosenFirst.ok) {
+    ports.toast("warning", "Trace not found — nothing restored")
+    return
+  }
+
+  const confirmed = await confirmAsync(
+    ports,
+    "Confirm restore",
+    buildRestoreConfirmMessage({ createdAt: chosenFirst.entry.createdAt, stretch: chosenFirst.entry.stretch }),
+  )
+  if (!confirmed) return
+
+  const reStatus = await resolveStatus(ports, sessionID)
+  if (isBusyStatus(reStatus)) {
+    ports.toast("warning", "Session is busy — try again when it's idle")
+    return
+  }
+  const secondRead = ports.readTraces(sessionID)
+  if (!secondRead.ok) {
+    ports.toast("error", "Could not read distill traces")
+    return
+  }
+  const fresh = secondRead.traces.find((t) => t.ok && t.ts === selectedTs)
+  if (fresh === undefined || !fresh.ok) {
+    ports.toast("warning", "Trace not found — nothing restored")
+    return
+  }
+
+  const stretchMessageIDs = [...fresh.entry.stretch]
+  const partsByMessage = new Map<string, readonly PartLike[]>()
+  for (const messageID of stretchMessageIDs) {
+    partsByMessage.set(messageID, ports.readParts(messageID))
+  }
+  const pristineResult = pristineReconstruct(partsByMessage, secondRead.traces, stretchMessageIDs)
+  if (!pristineResult.ok) {
+    ports.toast("warning", "A related distill trace is corrupted — restore unavailable for this stretch")
+    return
+  }
+
+  const opsResult = buildRestoreOps(partsByMessage, pristineResult.pristine, stretchMessageIDs)
+  if (!opsResult.ok) {
+    ports.toast("error", "Restore cannot proceed — nothing was changed")
+    return
+  }
+  const directory = ports.readDirectory()
+  const updates = opsResult.ops.filter((op) => op.kind === "update")
+  const deletes = opsResult.ops.filter((op) => op.kind === "delete")
+
+  for (const op of updates) {
+    if (op.kind !== "update") continue
+    const result = await ports.updatePart({
+      sessionID,
+      messageID: op.messageID,
+      partID: op.part.id,
+      directory,
+      part: op.part,
+    })
+    if (!result.ok) {
+      const mapped = mapUpdateError(result.error, result.status)
+      ports.toast("error", `${mapped.message} — Restore incomplete — re-run /distill-restore (it is safe to retry)`)
+      return
+    }
+  }
+
+  for (const op of deletes) {
+    if (op.kind !== "delete") continue
+    const result = await ports.deletePart({
+      sessionID,
+      messageID: op.messageID,
+      partID: op.partID,
+      directory,
+    })
+    if (!result.ok) {
+      const mapped = mapUpdateError(result.error, result.status)
+      ports.toast("error", `${mapped.message} — Restore incomplete — re-run /distill-restore (it is safe to retry)`)
+      return
+    }
+  }
+
+  void ports.appendStatus(sessionID, selectedTs, "restored", ports.now())
+  ports.toast("success", "Restore complete — original content is back")
 }
