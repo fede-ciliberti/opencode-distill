@@ -958,3 +958,96 @@ export function buildReportToast(
   const saved = beforeChars - afterChars
   return `Distilled ${nMessages} messages — ~${saved} chars saved (≈${estTokens(saved)} tokens, estimate)`
 }
+
+// --- Mapeo de errores del UPDATE (espejo de mapDeleteError del sibling) ---
+
+/** Resultado discriminado del mapeo de errores del UPDATE. */
+export type UpdateErrorKind =
+  | "busy"
+  | "session-not-found"
+  | "unsupported-version"
+  | "request-failed"
+  | "network"
+  | "version-mismatch"
+
+export type UpdateErrorMapping = {
+  kind: UpdateErrorKind
+  /** Copy en inglés, lista para el toast. */
+  message: string
+  status?: number
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
+/** Forma del `NotFoundError` del SDK: `{ name: "NotFoundError", data: { message } }`. */
+function isNotFoundErrorShape(body: unknown): boolean {
+  if (!isRecord(body)) return false
+  if (body["name"] !== "NotFoundError") return false
+  const data = body["data"]
+  return isRecord(data) && typeof data["message"] === "string"
+}
+
+/** El interceptor del SDK throwea este texto para respuestas `text/html` (C4). */
+function mentionsVersionMismatch(text: string): boolean {
+  return /text\/html|not supported by this version/i.test(text)
+}
+
+function genericUpdateFailure(status: number): UpdateErrorMapping {
+  return { kind: "request-failed", message: `Update failed (${status})`, status }
+}
+
+/**
+ * Mapea el error del UPDATE a un resultado discriminado con copy lista.
+ * Cubre los dos carriles (C4): el `throw` del interceptor (siempre un `Error`)
+ * y el `result.error` del result-tuple (body parseado + status HTTP).
+ */
+export function mapUpdateError(error: unknown, status?: number): UpdateErrorMapping {
+  // Carril 1: throw del interceptor o de `fetch` (sin result-tuple).
+  if (error instanceof Error) {
+    if (mentionsVersionMismatch(error.message)) {
+      return {
+        kind: "version-mismatch",
+        message: "This opencode version doesn't support part writes",
+        status,
+      }
+    }
+    return { kind: "network", message: "Could not reach opencode server", status }
+  }
+  // Cuerpo de error en texto plano (no-JSON): solo distingue version-mismatch;
+  // el resto lo decide el status más abajo (un string nunca tiene forma NotFoundError).
+  if (typeof error === "string") {
+    if (mentionsVersionMismatch(error) || /<html/i.test(error)) {
+      return {
+        kind: "version-mismatch",
+        message: "This opencode version doesn't support part writes",
+        status,
+      }
+    }
+  }
+  // El 409 manda: la sesión está ocupada (protección defensiva; task #5 midió que no hay 409 real).
+  if (status === 409) {
+    return { kind: "busy", message: "Session was busy — nothing written", status }
+  }
+  // 404 con forma NotFoundError → la sesión ya no existe.
+  if (isNotFoundErrorShape(error) && (status === 404 || status === undefined)) {
+    return {
+      kind: "session-not-found",
+      message: "Session not found — it may have been deleted",
+      status,
+    }
+  }
+  // 404 genérico → el endpoint no existe en esta versión (drift, C9).
+  if (status === 404) {
+    return {
+      kind: "unsupported-version",
+      message: "This opencode version doesn't support part writes",
+      status,
+    }
+  }
+  // 400/401/403/5xx → genérico con status.
+  if (status !== undefined) return genericUpdateFailure(status)
+  // Sin status ni forma conocida → no hubo respuesta (red caída).
+  return { kind: "network", message: "Could not reach opencode server" }
+}

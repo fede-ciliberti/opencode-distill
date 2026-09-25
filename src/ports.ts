@@ -78,8 +78,12 @@ export interface PartWriter {
 export interface ScratchSession {
   /** Crea la sesión scratch; devuelve el sessionID. */
   createScratch(directory: string, title: string): Promise<string>
-  /** Promptea la scratch y devuelve el texto de respuesta (con timeout). */
-  promptScratch(sessionID: string, directory: string, text: string): Promise<string>
+  /** Promptea la scratch y devuelve texto + modelo del assistant (con timeout). */
+  promptScratch(
+    sessionID: string,
+    directory: string,
+    text: string,
+  ): Promise<{ text: string; model: { providerID: string; modelID: string } }>
   /** Borra la sesión scratch (siempre en finally). */
   deleteScratch(sessionID: string, directory: string): Promise<void>
 }

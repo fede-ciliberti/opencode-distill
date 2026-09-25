@@ -141,7 +141,7 @@ function adapt(fake: FakeApi): FlowPorts {
       const turns = fake.scratchSessions.get(sessionID)
       if (turns === undefined) throw new Error(`Scratch session not found: ${sessionID}`)
       turns.push({ directory, title: "", text })
-      return fake.scratchReply
+      return { text: fake.scratchReply, model: { providerID: "anthropic", modelID: "claude-sonnet-4" } }
     },
 
     async deleteScratch(sessionID, directory) {
@@ -341,7 +341,7 @@ describe("FlowPorts contract (adapt de referencia, sin casts)", () => {
     await expect(ports.deletePart(args)).resolves.toEqual({ ok: false, error: boom })
   })
 
-  test("ScratchSession: create→prompt→delete con reply de texto", async () => {
+  test("ScratchSession: create→prompt→delete con reply de texto + modelo", async () => {
     const fake = makeFake(freshDir())
     const ports: FlowPorts = adapt(fake)
 
@@ -349,7 +349,8 @@ describe("FlowPorts contract (adapt de referencia, sin casts)", () => {
     expect(typeof sessionID).toBe("string")
     expect(sessionID.length).toBeGreaterThan(0)
     const reply = await ports.promptScratch(sessionID, fake.directory, "distill this")
-    expect(reply).toBe("distilled summary")
+    expect(reply.text).toBe("distilled summary")
+    expect(reply.model).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-4" })
     await ports.deleteScratch(sessionID, fake.directory)
     expect(fake.scratchSessions.has(sessionID)).toBe(false)
     await expect(ports.promptScratch(sessionID, fake.directory, "late")).rejects.toThrow()
